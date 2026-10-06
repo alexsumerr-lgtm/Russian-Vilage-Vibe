@@ -1222,9 +1222,30 @@ function folderSongs() {
       .map((n) => ({ title: fileTitle(n), url: RADIO_DIR + encodeURIComponent(n) }));
     radioList();
     radioUi();
+    RADIO.folder.forEach(tagTitle);
     return RADIO.folder;
   })();
   return RADIO.folderP;
+}
+// a folder song's title from its tags, read from the first 64 KB of the file (the tags come first; the rest of the
+// file is downloaded when it plays), so the radio row shows "Artist — Title" rather than a transliterated file name
+async function tagTitle(s) {
+  try {
+    const r = await fetch(s.url, { headers: { Range: 'bytes=0-65535' } });
+    if (!r.ok || !r.body) return;
+    const reader = r.body.getReader(), parts = [];
+    let n = 0;
+    while (n < 65536) {                                   // a server without ranges sends it all: stop reading early
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value); n += value.length;
+    }
+    reader.cancel().catch(() => {});
+    const b = new Uint8Array(n);
+    parts.reduce((o, p) => (b.set(p, o), o + p.length), 0);
+    const t = songTitle(b.buffer, decodeURIComponent(s.url.slice(RADIO_DIR.length)));
+    if (t !== s.title) { s.title = t; radioUi(); }
+  } catch (e) { /* the file name stays */ }
 }
 let songDbP = null;
 function songStore(mode, fn) {
