@@ -1,0 +1,1854 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Уголок мастерской</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=PT+Mono&family=PT+Sans:wght@400;700&family=PT+Sans+Narrow:wght@700&display=swap">
+<style>
+  /* Layout: the WebGL stage fills the window; a slim HUD of two cards floats over it and wraps on phones.
+     One deliberate night look (the scene is a lamp-lit shed at dusk), so a single dark palette. */
+  :root {
+    color-scheme: dark;
+    --stage-1: #1c2128;        /* blue-slate around the diorama */
+    --stage-2: #0b0d11;
+    --ink: #ece6d9;            /* paper white of the posters */
+    --ink-dim: #a39c8f;
+    --panel: rgb(16 18 22 / 0.68);
+    --line: rgb(236 230 217 / 0.14);
+    --lamp: #e8a65a;           /* the bench lamp, warm */
+    --drl: #a9c4dc;            /* the mercury street lamp, cold */
+    --f-display: "PT Sans Narrow", "Arial Narrow", "Roboto Condensed", sans-serif;
+    --f-body: "PT Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
+    --f-mono: "PT Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    margin: 0;
+    background: radial-gradient(120% 90% at 50% 40%, var(--stage-1), var(--stage-2)) var(--stage-2);
+    color: var(--ink);
+    font: 15px/1.45 var(--f-body);
+  }
+  canvas#stage { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+  .hud {
+    position: fixed; left: 0; right: 0; top: 0;
+    padding: calc(env(safe-area-inset-top, 0px) + 16px) 16px 0;
+    display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 10px;
+    pointer-events: none;
+  }
+  .card {
+    pointer-events: auto; min-width: 0;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 12px; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  }
+  h1 {
+    margin: 0; font: 700 22px/1.1 var(--f-display); letter-spacing: 0.02em; text-wrap: balance;
+  }
+  .sub { margin: 2px 0 0; color: var(--ink-dim); font-size: 13px; }
+  .sub b { color: var(--lamp); font-weight: 400; }
+  .sub i { color: var(--drl); font-style: normal; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  button {
+    font: 700 13px/1 var(--f-display); letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 7px;
+    padding: 7px 10px; cursor: pointer;
+  }
+  button[aria-pressed="true"] { border-color: var(--lamp); color: var(--lamp); }
+  #vol, #rvol { width: 92px; margin: 0 2px; align-self: center; accent-color: var(--lamp); cursor: pointer; }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  button.fold { padding: 5px 8px; font-size: 12px; color: var(--ink-dim); }
+  .hud.folded .stats { display: none; }
+  .row.radio { align-items: center; margin-top: 8px; }
+  .radio .now { flex: 1 1 180px; min-width: 0; max-width: 340px; color: var(--ink-dim); font-size: 13px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .radio .now b { color: var(--lamp); font-weight: 400; }
+  button:hover { border-color: var(--lamp); }
+  button:focus-visible { outline: 2px solid var(--lamp); outline-offset: 2px; }
+  .stats { font: 12px/1.5 var(--f-mono); color: var(--ink-dim); text-align: right; font-variant-numeric: tabular-nums; }
+  .hint {
+    position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+    margin: 0; text-align: center; color: var(--ink-dim); font-size: 13px; pointer-events: none;
+    transition: opacity 0.6s ease;
+  }
+  .hint.gone { opacity: 0; }
+  .loading {
+    position: fixed; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px;
+    padding-inline: 16px; color: var(--ink-dim); font-size: 13px; text-align: center;
+  }
+  .bar { width: min(260px, 70vw); height: 3px; border-radius: 2px; background: var(--line); overflow: hidden; }
+  .bar span { display: block; height: 100%; width: 0%; background: var(--lamp); transition: width 0.2s linear; }
+  .loading p { margin: 0; max-width: 40ch; }
+  @media (max-width: 520px) {
+    h1 { font-size: 19px; }
+    .stats { display: none; }
+    button { padding: 7px 7px; letter-spacing: 0.03em; }   /* the switches stay compact on a phone */
+    #vol, #rvol { width: 76px; }
+    .radio .now { flex-basis: 100%; max-width: none; }     /* the song on its own line, its buttons below */
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .bar span, .hint { transition: none; }
+  }
+  .sm-only { display: none; }
+  canvas#stage.pick { cursor: pointer; }
+  .hud.away { visibility: hidden; }
+
+  /* inspect: the chosen thing alone on the left (it turns under the pointer), its card on the right;
+     on narrow screens the card is a bottom sheet and the thing sits above it */
+  .inspect { position: fixed; inset: 0; pointer-events: none; }
+  .inspect .sheet {
+    pointer-events: auto; position: absolute; top: 16px; right: 16px; bottom: 16px; width: min(460px, 40vw);
+    overflow-y: auto; overscroll-behavior: contain; box-sizing: border-box;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px 22px;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+  .sheet .kicker { margin: 0; font: 700 12px/1.2 var(--f-display); letter-spacing: 0.08em; text-transform: uppercase; color: var(--lamp); }
+  .sheet h2 { margin: 6px 0 2px; font: 700 26px/1.1 var(--f-display); letter-spacing: 0.01em; text-wrap: balance; }
+  .sheet .meta { margin: 0 0 14px; color: var(--ink-dim); font-size: 13px; }
+  .sheet .body p { margin: 0 0 10px; }
+  .sheet h3 { margin: 18px 0 8px; font: 700 12px/1.2 var(--f-display); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-dim); }
+  .sheet ul, .sheet ol { margin: 0; padding-left: 20px; font-size: 14px; }
+  .sheet li { margin-bottom: 6px; }
+  .sheet ol a { color: var(--drl); overflow-wrap: anywhere; }
+  .sheet .note { margin: 16px 0 0; padding-top: 10px; border-top: 1px solid var(--line); color: var(--ink-dim); font-size: 12.5px; }
+  .inspect .close {
+    pointer-events: auto; position: absolute; top: 16px; left: 16px; font-size: 13px;
+    background: var(--panel); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  }
+  .inspect .ihint { position: absolute; left: 16px; bottom: 16px; margin: 0; color: var(--ink-dim); font-size: 13px; }
+  @media (max-width: 760px), (max-aspect-ratio: 1/1) {
+    .inspect .sheet { top: auto; left: 0; right: 0; bottom: 0; width: auto; height: 56vh; border-radius: 14px 14px 0 0;
+      padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 22px); }
+    .inspect .ihint { bottom: calc(56vh + 10px); }
+  }
+  @media (max-width: 520px) {
+    .lg-only { display: none; }
+    .sm-only { display: inline; }
+    .sheet h2 { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="stage" tabindex="0" aria-label="Трёхмерная сцена: столярный уголок в сарае"></canvas>
+<div class="hud">
+  <section class="card">
+    <div class="head">
+      <h1>Уголок мастерской</h1>
+      <button id="menuBtn" class="fold" type="button" aria-expanded="true" aria-controls="menuBody">Скрыть</button>
+    </div>
+    <div id="menuBody">
+    <p class="sub">Столярка в дачном сарае, 70-е. Вечер, <span id="lampText">горит <b>лампа</b></span>, за окном <i>фонарь</i>.</p>
+    <div class="row">
+      <button id="reset" type="button" aria-label="Вид по умолчанию"><span class="lg-only">Вид по умолчанию</span><span class="sm-only">Вид</span></button>
+      <button id="lamp" type="button" aria-pressed="true" hidden>Лампа</button>
+      <button id="soundBtn" type="button" aria-pressed="false" hidden>Звук</button>
+      <input id="vol" type="range" min="0" max="100" value="75" aria-label="Громкость звуков сцены" hidden>
+      <button id="inspectBtn" type="button" aria-pressed="false" hidden>Осмотр</button>
+      <button id="haze" type="button" aria-pressed="true">Дымка</button>
+      <button id="probe" type="button" aria-pressed="true">Блики</button>
+    </div>
+    <div class="row radio" id="radioPanel" hidden>
+      <span class="now"><b>Приёмник</b> <span id="radioNow">шум эфира</span></span>
+      <button id="radioPrev" type="button" aria-label="Предыдущая песня" hidden>&#x25C0;&#xFE0E;&#x25C0;&#xFE0E;</button>
+      <button id="radioPlay" type="button" aria-label="Играть" hidden>&#x25B6;&#xFE0E;</button>
+      <button id="radioNext" type="button" aria-label="Следующая песня" hidden>&#x25B6;&#xFE0E;&#x25B6;&#xFE0E;</button>
+      <input id="rvol" type="range" min="0" max="100" value="75" aria-label="Громкость приёмника">
+      <button id="radioAdd" type="button" title="Свои песни с этого устройства. Они остаются в вашем браузере и никуда не загружаются">Песни…</button>
+      <button id="radioOff" type="button" aria-label="Выключить приёмник">Выкл.</button>
+      <input id="radioFiles" type="file" accept="audio/*,.mp3,.m4a,.ogg,.wav,.flac" multiple hidden>
+    </div>
+    </div>
+  </section>
+  <div class="card stats" id="stats">—</div>
+</div>
+<div class="inspect" id="inspect" hidden>
+  <button class="close" id="inspectClose" type="button">← К мастерской</button>
+  <article class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="cTitle" tabindex="-1">
+    <p class="kicker" id="cKicker"></p>
+    <h2 id="cTitle"></h2>
+    <p class="meta" id="cMeta"></p>
+    <div class="body" id="cBody"></div>
+    <div id="cFactsBox"><h3>Факты</h3><ul id="cFacts"></ul></div>
+    <div id="cSrcBox"><h3>Источники</h3><ol id="cSources"></ol></div>
+    <p class="note" id="cNote" hidden></p>
+  </article>
+  <p class="ihint">Перетаскивайте, чтобы повернуть · колесо или щипок — ближе · Esc — назад</p>
+</div>
+<p class="hint" id="hint">Вращайте мышью или пальцем, колесо или щипок приближают. Выключатель на стене и приёмник на верстаке нажимаются.</p>
+<div class="loading" id="loading">
+  <div class="bar"><span id="bar"></span></div>
+  <p id="loadtext">Загрузка сцены…</p>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+
+// Everything about the scene comes from scene.json, written by the Blender export next to the GLB:
+// lightmaps per mesh, their scale, the probe, the exterior, glass, the lamp and the orbit limits.
+const deg = THREE.MathUtils.degToRad;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isSmall = Math.min(innerWidth, innerHeight) < 600;
+
+const canvas = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, stencil: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, isSmall ? 1.75 : 2));
+renderer.setSize(innerWidth, innerHeight, false);
+renderer.setClearColor(0x000000, 0);
+renderer.toneMapping = THREE.AgXToneMapping;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.03, 400);
+camera.layers.enableAll();                          // layer 1: glass and haze, drawn last while a motorcycle passes
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+const PAN = { min: new THREE.Vector3(-0.9, 0.3, -0.75), max: new THREE.Vector3(1.1, 1.9, 0.6) };
+controls.addEventListener('change', () => {
+  const before = controls.target.clone();
+  controls.target.clamp(PAN.min, PAN.max);
+  camera.position.add(controls.target.clone().sub(before));
+});
+
+// The lightmap already holds the diffuse light (direct + bounced): the probe adds reflections only,
+// dimmed where the lightmap is dark so that shadowed corners do not shine.
+// The lamp switch cross-fades every lightmap to a second one baked with the lamp off (loaded after the scene shows).
+const probeOn = { value: 1.0 };
+const lampOff = { value: 0.0 };                     // 0 lamp on .. 1 off, eased; shared by all lightmapped materials
+const BLACK = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+BLACK.needsUpdate = true;
+const offMaps = {};                                 // per lightmap group: { tex, intensity } uniforms
+const lamp = { target: 0, t: 0, bulb: null, bulbBase: 1, refl: null, cfg: null, exposure: 1, env: 1, ready: false };
+const pickables = [];          // room meshes with "_objid" per vertex (0: walls, floor, windows, cobwebs — not clickable)
+let ITEMS = null, CARDS = null, cardsUrl = null, inspectOn = false, inspecting = 0;
+const sw = { node: null, base: 0, angle: 0, target: 0, step: 0 };   // the rotary switch on the left wall
+const snd = { ctx: null, bytes: {}, buf: {} };
+function patchLightmapped(mat, specOcc, off) {
+  const occ = { value: specOcc };
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.lmSpecOcc = occ;
+    shader.uniforms.lmProbeOn = probeOn;
+    shader.uniforms.lmOff = lampOff;
+    shader.uniforms.lightMapOff = off.tex;
+    shader.uniforms.lightMapOffIntensity = off.intensity;
+    shader.fragmentShader = 'uniform float lmSpecOcc;\nuniform float lmProbeOn;\nuniform float lmOff;\n' +
+      'uniform sampler2D lightMapOff;\nuniform float lightMapOffIntensity;\n' + shader.fragmentShader.replace(
+      '#include <lights_fragment_maps>',
+      `#include <lights_fragment_maps>
+       #ifdef USE_LIGHTMAP
+         vec3 lmIrr = mix( lightMapIrradiance, texture2D( lightMapOff, vLightMapUv ).rgb * lightMapOffIntensity, lmOff );
+         irradiance += lmIrr - lightMapIrradiance;
+         iblIrradiance = vec3( 0.0 );
+         float lmLum = dot( lmIrr, vec3( 0.2126, 0.7152, 0.0722 ) );
+         radiance *= clamp( lmLum * lmSpecOcc, 0.0, 1.0 ) * lmProbeOn;
+       #endif`);
+  };
+  mat.needsUpdate = true;
+}
+
+// --- orbit: front sector only, limited tilt and zoom, distances measured from a "whole room in frame" fit ---
+const room = new THREE.Box3();
+let fitDist = 6, ORBIT = null, home = new THREE.Vector3();
+function placeCamera(az, el, dist) {
+  camera.position.copy(controls.target).add(new THREE.Vector3().setFromSphericalCoords(dist, deg(90 - el), deg(az)));
+  camera.lookAt(controls.target);
+  camera.updateMatrixWorld();
+}
+function computeFit() {
+  const c = [];
+  for (const x of [room.min.x, room.max.x]) for (const y of [room.min.y, room.max.y]) for (const z of [room.min.z, room.max.z]) c.push(new THREE.Vector3(x, y, z));
+  let lo = 0.5, hi = 40;
+  for (let i = 0; i < 32; i++) {
+    const mid = (lo + hi) / 2;
+    placeCamera(ORBIT.startAzimuthDeg, ORBIT.startElevationDeg, mid);
+    const ok = c.every((p) => { const q = p.clone().project(camera); return Math.abs(q.x) <= 0.92 && Math.abs(q.y) <= 0.84 && q.z < 1; });
+    if (ok) hi = mid; else lo = mid;
+  }
+  return hi;
+}
+function updateLimits() {
+  camera.clearViewOffset();
+  const pos = camera.position.clone(), tgt = controls.target.clone();
+  controls.target.copy(home); fitDist = computeFit();
+  controls.target.copy(tgt); camera.position.copy(pos);
+  controls.minDistance = fitDist * ORBIT.zoom[0];
+  controls.maxDistance = fitDist * ORBIT.zoom[1];
+}
+// The title card covers the top-left of the window and the hint line sits at the bottom. The start view shifts the
+// picture down to clear the card (a lens shift: the orbit pivot and the perspective stay the same) and, if the hint
+// is then in the way, steps the camera back a little. Where the room really is on screen comes from a tiny coverage
+// render: its bounding box is much bigger than the walls.
+let exterior = null, startScale = 0.88;
+const street = [];                         // the street meshes, seen only through the window glass
+const cover = new THREE.WebGLRenderTarget(256, 192, { stencilBuffer: true });
+function hudRoom(scale) {
+  const w = 256, h = Math.max(64, Math.round(w * innerHeight / innerWidth));
+  cover.setSize(w, h);
+  const vis = [haze.visible, street.map((o) => o.visible)];
+  placeCamera(ORBIT.startAzimuthDeg, ORBIT.startElevationDeg, fitDist * scale);
+  haze.visible = false; street.forEach((o) => { o.visible = false; });
+  renderer.setRenderTarget(cover); renderer.clear(); renderer.render(scene, camera); renderer.setRenderTarget(null);
+  haze.visible = vis[0]; street.forEach((o, i) => { o.visible = vis[1][i]; });
+  const px = new Uint8Array(w * h * 4);
+  renderer.readRenderTargetPixels(cover, 0, 0, w, h, px);
+  const col = (v) => v / innerWidth * w;
+  const card = document.querySelector('.card').getBoundingClientRect();
+  const tip = document.getElementById('hint'), hr = document.createRange(); hr.selectNodeContents(tip);
+  const hb = tip.classList.contains('gone') ? null : hr.getBoundingClientRect();
+  let top = h, bottom = -1, bottomHint = -1;                  // rows counted from the top of the window
+  for (let r = 0; r < h; r++) for (let x = 0; x < w; x++) {
+    if (px[((h - 1 - r) * w + x) * 4 + 3] === 0) continue;   // pixel rows come bottom-up
+    bottom = Math.max(bottom, r);
+    if (x >= col(card.left) - 1 && x <= col(card.right) + 1) top = Math.min(top, r);
+    if (hb && x >= col(hb.left) - 1 && x <= col(hb.right) + 1) bottomHint = Math.max(bottomHint, r);
+  }
+  const k = innerHeight / h;
+  let free = innerHeight - 16 - (bottom + 1) * k;
+  if (bottomHint >= 0) free = Math.min(free, hb.top - 8 - (bottomHint + 1) * k);
+  return { need: card.bottom + 14 - top * k, free };
+}
+function frameStart() {
+  camera.clearViewOffset();
+  const base = innerWidth > innerHeight ? 0.88 : 0.9;
+  const pos = camera.position.clone(), q = camera.quaternion.clone(), tgt = controls.target.clone();
+  controls.target.copy(home);
+  let fit = null;
+  for (let i = 0; i < 4; i++) {
+    startScale = base + 0.04 * i;
+    fit = hudRoom(startScale);
+    if (fit.need <= fit.free) break;
+  }
+  controls.target.copy(tgt); camera.position.copy(pos); camera.quaternion.copy(q); camera.updateMatrixWorld();
+  const shift = Math.round(Math.max(0, Math.min(fit.need, fit.free)));
+  if (shift > 0) camera.setViewOffset(innerWidth, innerHeight, 0, -shift, innerWidth, innerHeight);
+}
+function resetView() {
+  controls.target.copy(home); updateLimits();
+  frameStart();
+  placeCamera(ORBIT.startAzimuthDeg, ORBIT.startElevationDeg, fitDist * startScale);
+  controls.update();
+}
+
+// --- sawdust haze: a soft light cone under the shade and drifting motes that light up inside it ---
+const haze = new THREE.Group();
+scene.add(haze);
+const HAZE_ANGLE = 30;
+function buildHaze(apex, floorY, beamBottomY) {
+  const h = apex.y - beamBottomY;
+  const cone = new THREE.Mesh(
+    new THREE.ConeGeometry(Math.tan(deg(HAZE_ANGLE)) * h, h, 48, 1, true),
+    new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+      uniforms: { uTime: { value: 0 }, uColor: { value: new THREE.Color(1.0, 0.86, 0.68) }, uStrength: { value: 0.55 } },
+      vertexShader: `varying vec3 vPos; varying vec3 vN; varying vec3 vView; varying float vCamDist;
+        void main() { vPos = position; vec4 wp = modelMatrix * vec4(position, 1.0);
+          vN = normalize(mat3(modelMatrix) * normal); vView = normalize(cameraPosition - wp.xyz);
+          vCamDist = length(cameraPosition - wp.xyz);
+          gl_Position = projectionMatrix * viewMatrix * wp; }`,
+      fragmentShader: `uniform float uTime; uniform vec3 uColor; uniform float uStrength;
+        varying vec3 vPos; varying vec3 vN; varying vec3 vView; varying float vCamDist;
+        float hash(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5); }
+        float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+          return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y); }
+        void main() {
+          float t = clamp(0.5 - vPos.y / ${h.toFixed(3)}, 0.0, 1.0);
+          float fall = pow(1.0 - t, 2.2);
+          float rim = pow(abs(dot(normalize(vN), normalize(vView))), 1.5);
+          float n = noise(vec2(atan(vPos.x, vPos.z) * 3.0, vPos.y * 6.0 - uTime * 0.05));
+          float nearFade = smoothstep(0.6, 1.8, vCamDist);
+          gl_FragColor = vec4(uColor * uStrength * fall * rim * nearFade * (0.75 + 0.5 * n), 1.0);
+        }`,
+    }));
+  cone.position.set(apex.x, apex.y - h / 2, apex.z);
+  cone.renderOrder = 6;
+  haze.add(cone);
+
+  const N = isSmall ? 220 : 340, roomH = apex.y - floorY;
+  const pos = new Float32Array(N * 3), seed = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const r = Math.sqrt(Math.random()) * 0.75, a = Math.random() * Math.PI * 2;
+    pos[i * 3] = apex.x + Math.cos(a) * r;
+    pos[i * 3 + 1] = floorY + 0.2 + Math.random() * (roomH - 0.1);
+    pos[i * 3 + 2] = apex.z + Math.sin(a) * r;
+    seed[i] = Math.random();
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('seed', new THREE.BufferAttribute(seed, 1));
+  const motes = new THREE.Points(g, new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    uniforms: { uTime: { value: 0 }, uApex: { value: apex.clone() }, uTan: { value: Math.tan(deg(HAZE_ANGLE + 6)) },
+                uPix: { value: renderer.getPixelRatio() }, uFade: { value: 1.0 } },
+    vertexShader: `attribute float seed; uniform float uTime; uniform vec3 uApex; uniform float uTan; uniform float uPix;
+      varying float vLit; varying float vFade;
+      void main() {
+        vec3 p = position;
+        float s = seed * 6.2831;
+        // most specks are faint, a few catch the lamp and glint; each one slowly turns in the light
+        float glint = 0.35 + 1.6 * pow(fract(seed * 7.31), 4.0);
+        float turn = 0.55 + 0.45 * sin(uTime * (0.4 + seed) + s * 3.0);
+        p.x += sin(uTime * 0.11 + s) * 0.05; p.z += cos(uTime * 0.09 + s * 1.7) * 0.05;
+        p.y += mod(uTime * 0.008 * (0.5 + seed), 0.3) - 0.15;
+        vec3 d = p - uApex; float down = -d.y;
+        float inCone = down > 0.0 ? smoothstep(uTan * down, uTan * down * 0.6, length(d.xz)) : 0.0;
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        float camDist = -mv.z;
+        vFade = smoothstep(0.4, 1.4, camDist);
+        vLit = inCone / (1.0 + down * down * 0.8) * glint * turn;
+        gl_PointSize = (1.2 + 1.9 * seed * seed) * uPix * min(2.0 / camDist, 1.4);
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `uniform float uFade; varying float vLit; varying float vFade;
+      void main() { vec2 c = gl_PointCoord - 0.5; float a = smoothstep(0.5, 0.0, length(c));
+        gl_FragColor = vec4(vec3(1.0, 0.84, 0.62) * a * (0.01 + 1.8 * vLit) * vFade * uFade, 1.0); }`,
+  }));
+  motes.frustumCulled = false;
+  motes.renderOrder = 7;
+  haze.add(motes);
+  return [cone, motes];
+}
+
+// --- the street after the rain: mist over the lane, thickest on the ground and drifting, lit by the street lamp,
+// by the shed's window while the lamp burns and by a passing motorcycle's headlamp, which also lights the road and
+// the fences ahead of it. Marched in the street's own shaders from the window glass outward (6 steps, dithered),
+// before tone mapping; the old linear fog still takes the far distance.
+const MIST = {
+  uMist: { value: new THREE.Vector4(0.035, 1.0, 0.006, 0.7) },     // density on the ground, height scale, haze, noise
+  uMistColor: { value: new THREE.Color(0.045, 0.05, 0.06) },        // the dusk light the mist scatters
+  uMistTime: { value: 0 },
+  uLampPos: { value: new THREE.Vector3(-0.5, 4.17, -2.0) }, uLampCol: { value: new THREE.Color(0, 0, 0) },
+  uWinPos: { value: new THREE.Vector3(0.12, 1.76, -0.83) }, uWinCol: { value: new THREE.Color(0, 0, 0) },
+  uHeadPos: { value: new THREE.Vector3(0, -100, 0) }, uHeadDir: { value: new THREE.Vector3(1, 0, 0) },
+  uHeadCol: { value: new THREE.Color(0, 0, 0) },
+  uLampOn: { value: 1 },                                           // the shed's lamp: 1 on .. 0 off, eased
+};
+const WIN_GLOW = new THREE.Color(1.0, 0.72, 0.45), HEAD_COL = new THREE.Color(1.0, 0.86, 0.66);
+const MIST_K = { lamp: 0.9, win: 0.25, head: 40.0, headAir: 0.02 };
+const MIST_PARS = `
+uniform vec4 uMist; uniform vec3 uMistColor; uniform float uMistTime;
+uniform vec3 uLampPos; uniform vec3 uLampCol; uniform vec3 uWinPos; uniform vec3 uWinCol;
+uniform vec3 uHeadPos; uniform vec3 uHeadDir; uniform vec3 uHeadCol;
+varying vec3 vMistWorld;
+float mHash(vec3 p) { p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+float mNoise(vec3 p) {
+  vec3 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  float a = mix(mHash(i), mHash(i + vec3(1.0, 0.0, 0.0)), f.x), b = mix(mHash(i + vec3(0.0, 1.0, 0.0)), mHash(i + vec3(1.0, 1.0, 0.0)), f.x);
+  float c = mix(mHash(i + vec3(0.0, 0.0, 1.0)), mHash(i + vec3(1.0, 0.0, 1.0)), f.x), d = mix(mHash(i + vec3(0.0, 1.0, 1.0)), mHash(i + vec3(1.0)), f.x);
+  return mix(mix(a, b, f.y), mix(c, d, f.y), f.z);
+}
+// the passing headlamp on a surface: a warm cone ahead of the bike, nothing on our side of the fence
+vec3 headLit(vec3 p) {
+  vec3 dh = p - uHeadPos; float d2 = dot(dh, dh) + 0.04; vec3 l = dh * inversesqrt(d2);
+  vec3 n = normalize(cross(dFdx(p), dFdy(p)));
+  float cone = smoothstep(0.84, 0.97, dot(l, uHeadDir));
+  return uHeadCol * (cone * abs(dot(n, l)) / (d2 + 2.0) * step(p.z, -2.25) * 0.08);
+}
+// light scattered toward the eye and what is left of the surface behind, from where the ray leaves the shed
+vec4 mistAlong(vec3 wp) {
+  vec3 ro = cameraPosition, rd = wp - ro;
+  float tEnd = length(rd); rd /= max(tEnd, 1e-4);
+  float t0 = tEnd;
+  if (rd.z < -1e-4) t0 = min(t0, (-0.83 - ro.z) / rd.z);         // the main window
+  if (rd.x < -1e-4) t0 = min(t0, (-1.12 - ro.x) / rd.x);         // the left one
+  t0 = clamp(t0, 0.0, tEnd);
+  float dt = min(tEnd - t0, 28.0) / 6.0;
+  float j = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  float T = 1.0; vec3 S = vec3(0.0);
+  for (int i = 0; i < 6; i++) {
+    vec3 p = ro + rd * (t0 + (float(i) + j) * dt);
+    float h = max(p.y + 0.25, 0.0);
+    float n = 0.65 * mNoise(p * vec3(0.3, 0.7, 0.3) + vec3(uMistTime * 0.05, -uMistTime * 0.01, uMistTime * 0.02))
+            + 0.35 * mNoise(p * 0.85 + vec3(-uMistTime * 0.035, 0.0, uMistTime * 0.03));
+    float dens = uMist.x * exp(-h / uMist.y) * mix(1.0, 2.0 * n, uMist.w) + uMist.z;
+    vec3 lit = uMistColor;
+    vec3 dl = uLampPos - p; float l2 = dot(dl, dl);
+    lit += uLampCol * smoothstep(0.25, 0.55, dl.y * inversesqrt(l2)) / (0.5 + l2);
+    vec3 dw = p - uWinPos; float w2 = dot(dw, dw) + 1e-4;
+    lit += uWinCol * max(0.0, -dw.z * inversesqrt(w2)) / (0.3 + w2);
+    vec3 dh = p - uHeadPos; float h2 = dot(dh, dh) + 1e-4;
+    lit += uHeadCol * ${MIST_K.headAir.toFixed(3)} * smoothstep(0.86, 0.97, dot(dh * inversesqrt(h2), uHeadDir)) / (0.2 + h2);
+    float a = dens * dt;
+    S += T * lit * a;
+    T *= exp(-a);
+  }
+  return vec4(S, T);
+}
+`;
+// kinds: 'street' (baked, unlit), 'near' (+ the lamp's share from a map), 'grass' (+ the lamp's share per vertex),
+// 'lit' (the motorcycle, lit by its own lights: mist only)
+function addMist(mat, kind, extra) {
+  mat.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, MIST, extra || {});
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vMistWorld;' + (kind === 'grass' ? '\nattribute vec3 _lamp; varying vec3 vLampC;' : ''))
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvMistWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;' + (kind === 'grass' ? '\nvLampC = _lamp;' : ''));
+    let fs = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + MIST_PARS +
+      (kind === 'near' ? 'uniform sampler2D uLampMapT; uniform float uLampOn;\n' : kind === 'grass' ? 'varying vec3 vLampC; uniform float uLampOn;\n' : ''));
+    if (kind === 'near') fs = fs.replace('#include <map_fragment>', '#include <map_fragment>\ndiffuseColor.rgb += diffuse * uLampOn * texture2D(uLampMapT, vMapUv).rgb;');
+    if (kind === 'grass') fs = fs.replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb += diffuse * uLampOn * vLampC;');
+    fs = fs.replace('#include <opaque_fragment>', '#include <opaque_fragment>\n{' + (kind === 'lit' ? '' : ' gl_FragColor.rgb += headLit(vMistWorld);') +
+      ' vec4 mst = mistAlong(vMistWorld); gl_FragColor.rgb = gl_FragColor.rgb * mst.a + mst.rgb; }');
+    sh.fragmentShader = fs;
+  };
+  mat.customProgramCacheKey = () => 'mist-' + kind;
+  return mat;
+}
+
+// --- the motorcycle: a red road bike with a rider rides past now and then, its headlamp on; the pass-by recording
+// plays with it (loudest when the bike is abreast of the window). Drawn in its own pass with its own lights (the
+// street lamp, the dusk sky, the shed's window), between the street and the window glass.
+const MOTO = { scene: new THREE.Scene(), bike: new THREE.Group(), wheels: [], path: null, cfg: null, state: 'idle', t0: 0, dur: 11.2,
+               peak: 4.9, speed: 7, r: 0.31, timer: 0, pos: new THREE.Vector3(0, -100, 0), glow: [], lights: {} };
+MOTO.scene.add(MOTO.bike);
+const HEAD_LOCAL = new THREE.Vector3(0.63, 0.915, 0), TAIL_LOCAL = new THREE.Vector3(-0.97, 0.73, 0);
+const _mp = new THREE.Vector3(), _md = new THREE.Vector3(), _mc = new THREE.Vector3();
+
+function setupMist(cfg) {
+  const ex = cfg.exterior, mc = ex.mist;
+  if (mc) {
+    MIST.uMist.value.set(mc.density, mc.height, mc.haze, mc.noise);
+    MIST.uMistColor.value.setRGB(mc.color[0] * 0.12, mc.color[1] * 0.12, mc.color[2] * 0.12);
+  }
+  const sl = ex.streetLamp || cfg.streetLamp;
+  if (sl) {
+    MIST.uLampPos.value.fromArray(sl.position);
+    MIST.uLampCol.value.fromArray(sl.color).multiplyScalar(MIST_K.lamp);
+  }
+  const on = 1 - lampOff.value;
+  MIST.uLampOn.value = on;
+  MIST.uWinCol.value.copy(WIN_GLOW).multiplyScalar(MIST_K.win * on);
+}
+
+// the bike's lamps seen as glows in the mist; the headlamp brightens as it turns toward the eye
+function glowMaterial(col, size) {
+  return new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    stencilWrite: true, stencilRef: 1, stencilFunc: THREE.EqualStencilFunc,
+    stencilFail: THREE.KeepStencilOp, stencilZFail: THREE.KeepStencilOp, stencilZPass: THREE.KeepStencilOp,
+    uniforms: { ...MIST, uGlow: { value: col.clone() }, uSize: { value: size } },
+    vertexShader: `uniform float uSize; varying vec2 vUv; varying vec3 vMistWorld;
+      void main() { vUv = uv; vec4 wp = modelMatrix * vec4(0.0, 0.0, 0.0, 1.0); vMistWorld = wp.xyz;
+        vec4 mv = viewMatrix * wp; mv.xy += position.xy * uSize; mv.z += 0.15;
+        gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `uniform vec3 uGlow;\n${MIST_PARS}\nvarying vec2 vUv;
+      void main() { float r = length(vUv - 0.5) * 2.0;
+        float a = (exp(-r * r * 9.0) + 0.25 * exp(-r * r * 2.5)) * (1.0 - smoothstep(0.8, 1.0, r));
+        vec4 m = mistAlong(vMistWorld);
+        gl_FragColor = vec4(uGlow * a * m.a, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  });
+}
+
+function setupMoto(cfg) {
+  const mc = cfg.moto;
+  if (!mc || !MOTO.bike.children.length) return;
+  MOTO.cfg = mc; MOTO.path = mc.path; MOTO.speed = mc.speed || 7; MOTO.r = mc.wheelRadius || 0.31;
+  if (mc.head) HEAD_LOCAL.fromArray(mc.head);
+  if (mc.tail) TAIL_LOCAL.fromArray(mc.tail);
+  const sm = cfg.sound && cfg.sound.moto;
+  if (sm && sm.peak) MOTO.peak = sm.peak;
+  MOTO.scene.fog = scene.fog;
+  // a dusk sky for the chrome and the paint to mirror: a small gradient, pre-filtered
+  const w = 64, h = 32, data = new Uint16Array(w * h * 4), half = THREE.DataUtils.toHalfFloat;
+  for (let y = 0; y < h; y++) {
+    const v = y / (h - 1), k = Math.min(1, v / 0.5);
+    const c = v < 0.5 ? [0.04 + 0.08 * k, 0.05 + 0.085 * k, 0.07 + 0.09 * k] : [0.02, 0.018, 0.016];
+    for (let x = 0; x < w; x++) { const i = (y * w + x) * 4; data[i] = half(c[0]); data[i + 1] = half(c[1]); data[i + 2] = half(c[2]); data[i + 3] = half(1); }
+  }
+  const sky = new THREE.DataTexture(data, w, h, THREE.RGBAFormat, THREE.HalfFloatType);
+  sky.mapping = THREE.EquirectangularReflectionMapping; sky.needsUpdate = true;
+  const pm = new THREE.PMREMGenerator(renderer), env = pm.fromEquirectangular(sky).texture;
+  pm.dispose(); sky.dispose();
+  MOTO.bike.traverse((o) => {
+    if (!o.isMesh) return;
+    o.frustumCulled = false; o.renderOrder = 2;
+    Object.assign(o.material, {
+      side: THREE.DoubleSide, fog: true, envMap: env, envMapIntensity: 1.0,
+      stencilWrite: true, stencilRef: 1, stencilFunc: THREE.EqualStencilFunc,
+      stencilFail: THREE.KeepStencilOp, stencilZFail: THREE.KeepStencilOp, stencilZPass: THREE.KeepStencilOp,
+    });
+    addMist(o.material, 'lit');
+  });
+  MOTO.wheels = mc.wheels.map((n) => MOTO.bike.getObjectByName(n)).filter(Boolean);
+  for (const wh of MOTO.wheels) wh.userData.rest = wh.rotation.z;
+  const sl = cfg.exterior.streetLamp || cfg.streetLamp;
+  const hemi = new THREE.HemisphereLight(0x8d9ab0, 0x2a241e, 0.55);
+  const spotL = new THREE.SpotLight(new THREE.Color().fromArray(sl ? sl.color : [0.8, 0.9, 1.0]), 70, 0, deg(65), 0.5, 2);
+  spotL.position.fromArray(sl ? sl.position : [-0.5, 4.17, -2.0]);
+  spotL.target.position.copy(spotL.position).add(new THREE.Vector3(0, -1, 0));
+  const win = new THREE.PointLight(0xffc48c, 4 * (1 - lampOff.value), 0, 2);
+  win.position.set(0.12, 1.6, -1.1);
+  MOTO.scene.add(hemi, spotL, spotL.target, win);
+  MOTO.lights = { hemi, spot: spotL, win };
+  MOTO.glow = [new THREE.Mesh(new THREE.PlaneGeometry(1, 1), glowMaterial(HEAD_COL, 0.55)),
+               new THREE.Mesh(new THREE.PlaneGeometry(1, 1), glowMaterial(new THREE.Color(1.0, 0.08, 0.04), 0.2))];
+  for (const g of MOTO.glow) { g.frustumCulled = false; g.renderOrder = 3; MOTO.scene.add(g); }
+  endMoto();
+  motoSchedule(true);
+}
+function motoAt(x, out) {                                // a point of the rut it rides in, and the heading there
+  const P = MOTO.path, n = P.length, f = x - P[0][0];
+  const i = Math.max(0, Math.min(n - 2, Math.floor(f))), u = Math.max(0, Math.min(1, f - i)), a = P[i], b = P[i + 1];
+  out.set(a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u);
+  return Math.atan2(-(b[2] - a[2]), b[0] - a[0]);
+}
+function endMoto() {
+  MOTO.state = 'idle'; MOTO.bike.visible = false;
+  for (const g of MOTO.glow) g.visible = false;
+  MIST.uHeadCol.value.setRGB(0, 0, 0); MIST.uHeadPos.value.set(0, -100, 0);
+  MOTO.pos.set(0, -100, 0);
+}
+// left to right along the far rut, abreast of the window when the recording is loudest
+function updateMoto(now) {
+  if (MOTO.state !== 'riding') return false;
+  const t = now - MOTO.t0;
+  if (t > MOTO.dur) { endMoto(); return false; }
+  const x = 0.12 + MOTO.speed * (t - MOTO.peak);
+  const yaw = motoAt(x, MOTO.bike.position);
+  MOTO.bike.position.y += 0.012 * Math.sin(t * 11.0) + 0.006 * Math.sin(t * 23.0);    // the ruts under the wheels
+  MOTO.bike.rotation.set(0.015 * Math.sin(t * 6.3), yaw, 0, 'YXZ');
+  for (const wh of MOTO.wheels) wh.rotation.z = wh.userData.rest - x / MOTO.r;
+  MOTO.bike.updateMatrixWorld(true);
+  const k = Math.min(1, t / 0.6, (MOTO.dur - t) / 0.6);
+  const hp = MOTO.bike.localToWorld(_mp.copy(HEAD_LOCAL));
+  _md.set(Math.cos(yaw), -0.08, -Math.sin(yaw)).normalize();
+  MIST.uHeadPos.value.copy(hp); MIST.uHeadDir.value.copy(_md);
+  MIST.uHeadCol.value.copy(HEAD_COL).multiplyScalar(MIST_K.head * k);
+  const [hg, tg] = MOTO.glow;
+  hg.position.copy(hp);
+  const face = Math.max(0, _mc.copy(camera.position).sub(hp).normalize().dot(_md));
+  hg.material.uniforms.uGlow.value.copy(HEAD_COL).multiplyScalar((0.35 + 2.5 * face ** 4) * k);
+  tg.position.copy(MOTO.bike.localToWorld(_mp.copy(TAIL_LOCAL)));
+  tg.material.uniforms.uGlow.value.setRGB(1.0, 0.08, 0.04).multiplyScalar((0.25 + 0.8 * Math.max(0, -_mc.dot(_md)) ** 2) * k);
+  MOTO.pos.copy(MOTO.bike.position).y += 0.8;
+  return true;
+}
+function motoSchedule(first) {
+  clearTimeout(MOTO.timer);
+  if (reduceMotion || !MOTO.path) return;
+  const sm = (S.cfg && S.cfg.moto) || {};
+  const span = first ? (sm.first || [35, 70]) : (sm.every || [140, 320]);
+  MOTO.timer = setTimeout(() => motoPass(), rnd(span[0], span[1]) * 1000);
+}
+async function motoPass() {
+  if (MOTO.state !== 'idle' || !MOTO.path) return;
+  if (document.hidden) { motoSchedule(false); return; }
+  MOTO.state = 'starting';                               // the recording is fetched first if the sound is on
+  const sm = S.cfg && S.cfg.moto;
+  let start = null;
+  if (S.on && sm && sm.files) {
+    const f = pick(sm.files), b = await buffer(f.src);
+    if (b && S.on) start = () => {
+      const ctx = audioCtx(), src = ctx.createBufferSource(), g = ctx.createGain();
+      src.buffer = b; g.gain.value = dbGain(f.gain);
+      src.connect(g);
+      const where = spot('outMain', g, b.duration);
+      if (where) { where.follow = () => MOTO.pos; aimSpot(where, true); }
+      src.start();
+      track(src, { spot: where });
+    };
+  }
+  MOTO.t0 = clock.getElapsedTime(); MOTO.state = 'riding';
+  MOTO.bike.visible = true;
+  for (const g of MOTO.glow) g.visible = true;
+  if (start) start();
+  motoSchedule(false);
+}
+
+const stats = document.getElementById('stats');
+const bar = document.getElementById('bar');
+const loadtext = document.getElementById('loadtext');
+let sceneTris = 0, hazeParts = [];
+
+// The model and the probe ship as base64 inside JSON data files (the page host serves no .glb/.hdr):
+// read them as a stream for the progress bar, decode in memory and hand the bytes straight to the loaders.
+async function fetchEmbedded(url, expectedBytes, onProgress) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${url}: ${res.status}`);
+  const total = expectedBytes || Number(res.headers.get('content-length')) || 0;
+  const reader = res.body.getReader();
+  const chunks = []; let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value); received += value.length;
+    if (onProgress && total) onProgress(Math.min(received / total, 1), received);
+  }
+  const all = new Uint8Array(received); let off = 0;
+  for (const c of chunks) { all.set(c, off); off += c.length; }
+  const obj = JSON.parse(new TextDecoder().decode(all));
+  const bin = atob(obj.base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+// GLTFLoader reads the images embedded in a GLB through blob: object URLs, and the page host's security policy blocks
+// them: every material then loses its textures and turns into dark metal (the metalness factor is 1, the ORM texture
+// brings it down). Decode the embedded images straight from memory instead, with no URL at all.
+let textureFailures = 0;
+const fetchedImages = new Map();       // the model's textures, shipped as their own files and fetched with the model
+function inMemoryImages(parser) {
+  const viaUrl = parser.loadImageSource.bind(parser);
+  parser.loadImageSource = function (sourceIndex, loader) {
+    const def = this.json.images[sourceIndex];
+    const fetched = def.uri !== undefined ? fetchedImages.get(def.uri) : null;
+    if (def.bufferView === undefined && !fetched) return viaUrl(sourceIndex, loader);
+    if (this.sourceCache[sourceIndex] !== undefined) return this.sourceCache[sourceIndex].then((t) => t.clone());
+    const bytes = fetched ? Promise.resolve(fetched) : this.getDependency('bufferView', def.bufferView);
+    const promise = bytes.then((view) => {
+      const blob = new Blob([view], { type: def.mimeType });
+      return createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })
+        .catch(() => createImageBitmap(blob));
+    }).then((bitmap) => {
+      const tex = new THREE.Texture(bitmap);
+      tex.needsUpdate = true;
+      tex.userData.mimeType = def.mimeType;
+      return tex;
+    }).catch((err) => {
+      textureFailures++;
+      console.error('Texture could not be decoded:', def.name, err);
+      throw err;
+    });
+    this.sourceCache[sourceIndex] = promise;
+    return promise;
+  };
+  // stands in for the stock EXT_texture_webp plugin, whose WebP check loads a data: image that a strict policy may block
+  return {
+    name: 'EXT_texture_webp',
+    loadTexture(index) {
+      const ext = (parser.json.textures[index].extensions || {}).EXT_texture_webp;
+      return ext ? parser.loadTextureImage(index, ext.source, parser.textureLoader) : null;
+    },
+  };
+}
+
+function parseHDR(buffer) {
+  const d = new RGBELoader().parse(buffer);
+  const t = new THREE.DataTexture(d.data, d.width, d.height, THREE.RGBAFormat, d.type);
+  t.colorSpace = THREE.LinearSRGBColorSpace;
+  t.minFilter = THREE.LinearFilter; t.magFilter = THREE.LinearFilter;
+  t.generateMipmaps = false; t.flipY = true; t.needsUpdate = true;
+  t.mapping = THREE.EquirectangularReflectionMapping;
+  return t;
+}
+
+// which clickable thing each vertex belongs to: scene.json carries runs per mesh (count, id, count, id, ...), kept
+// out of the model file; picking reads them as a vertex attribute
+function restoreIds(g, runs, name) {
+  const n = g.attributes.position.count, ids = new Uint16Array(n);
+  let at = 0;
+  for (let i = 0; i + 1 < runs.length; i += 2) { ids.fill(runs[i + 1], at, at + runs[i]); at += runs[i]; }
+  if (at === n) g.setAttribute('_objid', new THREE.BufferAttribute(ids, 1));
+  else console.warn(`ids for ${name} do not fit the mesh (${at} of ${n} vertices)`);
+}
+
+async function load() {
+  // the scene's files sit next to the page; without them the server answers with its HTML 404 page
+  const cfgRes = await fetch('scene.json');
+  if (!cfgRes.ok) throw new Error(`нет файла scene.json рядом со страницей (${cfgRes.status}); откройте собранную папку site через веб-сервер`);
+  const cfg = await cfgRes.json();
+  ORBIT = cfg.camera;
+  home.fromArray(ORBIT.target);
+  controls.minAzimuthAngle = deg(ORBIT.azimuthDeg[0]);
+  controls.maxAzimuthAngle = deg(ORBIT.azimuthDeg[1]);
+  controls.minPolarAngle = deg(90 - ORBIT.elevationDeg[1]);
+  controls.maxPolarAngle = deg(90 - ORBIT.elevationDeg[0]);
+  camera.fov = ORBIT.fovDeg; camera.updateProjectionMatrix();
+  renderer.toneMappingExposure = cfg.exposure;
+
+  const texLoader = new THREE.TextureLoader();
+  const lightmaps = {};
+  for (const group of Object.keys(cfg.lightmaps)) offMaps[group] = { tex: { value: BLACK }, intensity: { value: 0 } };
+  for (const [group, d] of Object.entries(cfg.lightmaps)) {
+    const t = await texLoader.loadAsync(d.file);
+    t.colorSpace = THREE.SRGBColorSpace;   // stored gamma-encoded for precision in the shadows
+    t.channel = 1;                         // TEXCOORD_1
+    t.flipY = false;
+    lightmaps[group] = { tex: t, scale: d.scale };
+  }
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const hdr = parseHDR(await fetchEmbedded(cfg.probe.file));
+  const envMap = pmrem.fromEquirectangular(hdr).texture;
+  scene.environment = envMap;
+  scene.environmentIntensity = cfg.probe.intensity;
+
+  // the exterior: unlit baked colours (stored halved), fogged toward the dusk horizon like the Cycles render
+  const fc = cfg.exterior.fog;
+  scene.fog = new THREE.Fog(new THREE.Color().setRGB(fc.color[0] * 0.6, fc.color[1] * 0.6, fc.color[2] * 0.6, THREE.LinearSRGBColorSpace),
+                            fc.near, fc.far / 0.85);
+
+  // the model (base64 JSON) and its textures (WebP files) download together under one progress bar
+  const images = cfg.modelImages || [];
+  const total = (cfg.modelJsonBytes || 0) + images.reduce((n, im) => n + im.bytes, 0);
+  const got = { model: 0, images: 0 };
+  const progress = () => { bar.style.width = Math.round(Math.min(1, (got.model + got.images) / (total || 1)) * 100) + '%'; };
+  const imagesDone = Promise.all(images.map(async (im) => {
+    const res = await fetch(im.uri);
+    if (!res.ok) throw new Error(`${im.uri}: ${res.status}`);
+    const reader = res.body.getReader(), chunks = [];
+    let n = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value); n += value.length; got.images += value.length; progress();
+    }
+    const all = new Uint8Array(n); let off = 0;
+    for (const c of chunks) { all.set(c, off); off += c.length; }
+    fetchedImages.set(im.uri, all);
+  }));
+  const glb = await fetchEmbedded(cfg.model, cfg.modelJsonBytes, (f, n) => { got.model = n; progress(); });
+  await imagesDone;
+  loadtext.textContent = 'Подготовка сцены…';
+  const gltfLoader = new GLTFLoader();
+  gltfLoader.register(inMemoryImages);
+  const gltf = await gltfLoader.parseAsync(glb, '');
+  const root = gltf.scene;
+  const glassMeshes = [];
+  const near = cfg.exterior.near || {};
+  const lampMapT = near.lampMap ? await texLoader.loadAsync(near.lampMap).then((t) => {
+    t.colorSpace = THREE.SRGBColorSpace; t.flipY = false; return t; }).catch(() => null) : null;
+  const motoNodes = cfg.moto ? [cfg.moto.body, ...cfg.moto.wheels].map((n) => root.getObjectByName(n)).filter(Boolean) : [];
+  for (const n of motoNodes) MOTO.bike.add(n);                  // out of the room's scene, into its own pass
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    const g = o.geometry;
+    const m = o.material;
+    m.fog = false;
+    const group = cfg.lightmapOf[o.name];
+    const isStreet = o.name === cfg.exterior.mesh || (cfg.exterior.detail || []).includes(o.name);
+    if (!isStreet) sceneTris += (g.index ? g.index.count : g.attributes.position.count) / 3;
+    if (group && g.attributes.uv1 && m.isMeshStandardMaterial) {
+      const lm = lightmaps[group];
+      m.lightMap = lm.tex;
+      m.lightMapIntensity = Math.PI * lm.scale;      // baked as irradiance/π; three.js divides by π again
+      if (m.aoMap) m.aoMapIntensity = 0.35;         // the lightmap already carries most of the occlusion
+      patchLightmapped(m, 4.0 / (Math.PI * lm.scale), offMaps[group]);
+    }
+    const cutoff = cfg.alphaTest && cfg.alphaTest[m.name];
+    if (cutoff) { m.alphaTest = cutoff; m.transparent = false; m.depthWrite = true; }
+    if (o.name === 'WS_Decals') { m.depthWrite = false; m.polygonOffset = true; m.polygonOffsetFactor = -1; m.polygonOffsetUnits = -4; }
+    if (isStreet) {
+      // the street, unlit and stored / colorScale: far parts in vertex colours, the neighbour's yard in a baked atlas,
+      // its trees and bushes as cards (alpha-tested) facing the window
+      street.push(o);
+      const s = cfg.exterior.colorScale, cards = o.name === cfg.exterior.cards, colours = o.name === cfg.exterior.mesh;
+      const grass = o.name === near.grass, nearMesh = o.name === near.mesh && lampMapT;
+      if (colours) exterior = o;
+      if (m.map) m.map.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+      o.material = new THREE.MeshBasicMaterial({
+        vertexColors: colours || grass, map: colours || grass ? null : m.map, alphaTest: cards ? 0.5 : 0,
+        side: grass ? THREE.DoubleSide : THREE.FrontSide,
+        color: new THREE.Color(s, s, s), fog: true,
+        stencilWrite: true, stencilRef: 1, stencilFunc: THREE.EqualStencilFunc,
+        stencilFail: THREE.KeepStencilOp, stencilZFail: THREE.KeepStencilOp, stencilZPass: THREE.KeepStencilOp,
+      });
+      // the near street and its grass add the shed lamp's share as the lamp comes on; all of it sits in the mist
+      addMist(o.material, nearMesh ? 'near' : grass ? 'grass' : 'street', nearMesh ? { uLampMapT: { value: lampMapT } } : null);
+      o.renderOrder = 2;
+      o.frustumCulled = false;
+    }
+    if (cfg.glass.includes(o.name)) glassMeshes.push(o);
+    if (cfg.lamp && o.name === cfg.lamp.bulb && m.emissive) { lamp.bulb = m; lamp.bulbBase = m.emissiveIntensity; }
+    if (cfg.objIds && cfg.objIds[o.name] && !g.attributes._objid) restoreIds(g, cfg.objIds[o.name], o.name);
+    if (g.attributes._objid && !isStreet) pickables.push(o);
+    if (cfg.unlit.includes(o.name)) {
+      o.material = new THREE.MeshBasicMaterial({ map: m.map, transparent: true, depthWrite: false, fog: false,
+                                                 color: new THREE.Color(0.32, 0.31, 0.29) });
+      o.renderOrder = 5;
+    }
+  });
+  // windows: a stencil mask where the glass is visible lets the street show only through the panes,
+  // then the dirty glass itself, then additive reflections of the room (Fresnel of plain glass)
+  const maskMat = new THREE.MeshBasicMaterial({
+    colorWrite: false, depthWrite: false, side: THREE.DoubleSide,
+    stencilWrite: true, stencilRef: 1, stencilFunc: THREE.AlwaysStencilFunc, stencilZPass: THREE.ReplaceStencilOp,
+  });
+  const reflMat = lamp.refl = new THREE.MeshStandardMaterial({
+    color: 0x000000, roughness: 0.05, metalness: 0.0, envMap, envMapIntensity: 1.4,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+  });
+  for (const gm of glassMeshes) {
+    const mask = new THREE.Mesh(gm.geometry, maskMat); mask.renderOrder = 1; gm.add(mask);
+    gm.material.transparent = true; gm.material.depthWrite = false; gm.material.envMapIntensity = 0.0;
+    gm.renderOrder = 3;
+    const refl = new THREE.Mesh(gm.geometry, reflMat); refl.renderOrder = 4; gm.add(refl);
+    gm.layers.set(1); refl.layers.set(1);           // layer 1: drawn after a passing motorcycle (see the loop)
+  }
+  setupMist(cfg);
+  setupMoto(cfg, envMap);
+  scene.add(root);
+  root.updateMatrixWorld(true);
+  setupInteractive(cfg);
+  root.traverse((o) => { if (o.isMesh && !street.includes(o)) room.expandByObject(o); });
+  hazeParts = buildHaze(new THREE.Vector3(...cfg.lamp.position), 0.0, (cfg.haze && cfg.haze.toZ) || 0.88);
+  for (const p of hazeParts) p.layers.set(1);
+  lamp.cfg = cfg.lampOff || null;
+  lamp.exposure = renderer.toneMappingExposure; lamp.env = scene.environmentIntensity;
+  resetView();
+  document.getElementById('loading').hidden = true;
+  if (cfg.lightmapsOff) loadLampOff(cfg.lightmapsOff).catch(() => {});   // the switch just stays hidden
+  if (textureFailures) {                                    // say so rather than show a dark, wrong-looking room
+    const tip = document.getElementById('hint');
+    tip.textContent = `Не загрузились текстуры (${textureFailures}): сцена выглядит неверно. Обновите страницу.`;
+    tip.dataset.sticky = '1'; tip.classList.remove('gone');
+  }
+}
+load().catch((err) => {
+  loadtext.textContent = 'Сцена не загрузилась: ' + (err && err.message ? err.message : err) + '. Обновите страницу.';
+});
+
+// --- the lamp switch: lamp-off lightmaps, bulb, haze, reflections and an eye-adaptation exposure, eased together ---
+async function loadLampOff(maps) {
+  const loader = new THREE.TextureLoader();
+  for (const [group, d] of Object.entries(maps)) {
+    const t = await loader.loadAsync(d.file);
+    t.colorSpace = THREE.SRGBColorSpace; t.flipY = false;
+    offMaps[group].tex.value = t;
+    offMaps[group].intensity.value = Math.PI * d.scale;
+  }
+  lamp.ready = true;
+  document.getElementById('lamp').hidden = false;
+}
+function applyLamp() {
+  const k = lamp.t, s = k * k * (3 - 2 * k);
+  const c = lamp.cfg || { exposureStops: 0, envScale: 1, glow: 0 };
+  lampOff.value = s;
+  renderer.toneMappingExposure = lamp.exposure * Math.pow(2, c.exposureStops * s);
+  scene.environmentIntensity = lamp.env * (1 - (1 - c.envScale) * s);
+  if (lamp.refl) lamp.refl.envMapIntensity = 1.4 * (1 - (1 - c.envScale) * s);
+  if (lamp.bulb) lamp.bulb.emissiveIntensity = lamp.bulbBase * ((1 - s) + c.glow * s);
+  if (hazeParts.length) {
+    hazeParts[0].material.uniforms.uStrength.value = 0.55 * (1 - s);
+    hazeParts[1].material.uniforms.uFade.value = 1 - s;
+  }
+  if (S.hum) S.hum.level.gain.setTargetAtTime(1 - s, snd.ctx.currentTime, 0.04);
+  MIST.uLampOn.value = 1 - s;                                       // the shed's light on the fence, grass and mist
+  MIST.uWinCol.value.copy(WIN_GLOW).multiplyScalar(MIST_K.win * (1 - s));
+  if (MOTO.lights.win) MOTO.lights.win.intensity = 4 * (1 - s);
+}
+// ---------------------------------------------------------------- the wall switch, inspect mode, cards
+// Every clickable thing has a number in the model ("_objid" per vertex). The rotary switch on the left wall works in
+// any mode; in inspect mode the other things light up under the pointer and open a card: the thing alone on the
+// left (rendered with its baked light, it turns under the pointer), the story on the right.
+const $ = (id) => document.getElementById(id);
+function setupInteractive(cfg) {
+  if (cfg.switch) {
+    const node = scene.getObjectByName(cfg.switch.node);
+    if (node) { sw.node = node; sw.base = node.rotation.x; sw.step = -deg(cfg.switch.angle || 90); }   // clockwise, seen from the room
+    for (const [k, f] of Object.entries(cfg.switch.sounds || {})) {
+      fetch(f).then((r) => (r.ok ? r.arrayBuffer() : null)).then((b) => { if (b) snd.bytes[k] = b; }).catch(() => {});
+    }
+  }
+  if (cfg.sound) {
+    S.cfg = cfg.sound; S.scene = cfg;
+    let v = cfg.sound.volume ?? 75;
+    try { const kept = localStorage.getItem('workshop.volume'); if (kept !== null) v = Number(kept); } catch (e) { /* none kept */ }
+    $('vol').value = String(v);
+    try { const kept = localStorage.getItem('workshop.radioVolume'); if (kept !== null) $('rvol').value = kept; } catch (e) { /* none */ }
+    $('soundBtn').hidden = false;
+    for (const [k, u] of Object.entries(cfg.sound.ui || {})) {          // short sounds of the page itself
+      fetch(u.files[0].src).then((r) => (r.ok ? r.arrayBuffer() : null)).then((b) => { if (b) snd.bytes[k] = b; }).catch(() => {});
+    }
+  }
+  if (cfg.inspect) {
+    ITEMS = new Map(cfg.inspect.items.map((it) => [it.id, it]));
+    cardsUrl = cfg.inspect.cards;
+    $('inspectBtn').hidden = false;
+  }
+}
+
+// sounds play through Web Audio: the bytes come with the page, decoding waits for the first click (browser rule)
+async function playSound(key, gain = 0.9) {
+  if (snd.mute) return;                                // silent checks
+  try {
+    audioCtx();
+    if (snd.ctx.state === 'suspended') await snd.ctx.resume();
+    if (!snd.buf[key] && snd.bytes[key]) snd.buf[key] = await snd.ctx.decodeAudioData(snd.bytes[key].slice(0));
+    const b = snd.buf[key];
+    if (!b) return;
+    const src = snd.ctx.createBufferSource(), g = snd.ctx.createGain();
+    src.buffer = b; g.gain.value = gain;
+    src.connect(g).connect(snd.ctx.destination); src.start();
+  } catch (e) { /* the light still switches without the click */ }
+}
+
+function toggleLamp() {
+  if (!lamp.ready) return;                         // the lamp-off lightmaps are still loading
+  lamp.target = lamp.target ? 0 : 1;
+  const on = !lamp.target;
+  $('lamp').setAttribute('aria-pressed', String(on));
+  $('lampText').innerHTML = on ? 'горит <b>лампа</b>' : '<b>лампа</b> погашена';
+  sw.target += sw.step;
+  playSound(on ? 'on' : 'off');
+}
+$('lamp').addEventListener('click', toggleLamp);
+
+// ---------------------------------------------------------------- sound: the evening outside, the shed, the radio
+// The author's recordings ("sound" in scene.json, files in audio/, levels set by scene/scripts/audio_build.py).
+// Loops play as overlapping stretches from random places, so the 15-20 s clips do not repeat; one-shots (dogs, the
+// motorcycle, a creaking board...) come at random intervals. Each sound is panned toward its place as the view turns.
+// The radio plays when clicked outside inspect mode; its tuning whistles and the lamp's faint filament buzz are
+// synthesised. Clicks of the switches go straight out; everything else through one bus under the volume slider.
+const S = { cfg: null, scene: null, on: false, bus: null, bufs: new Map(), runners: [], live: new Set(), spots: [],
+            anchors: null, radioOn: false, radio: null, hum: null };
+function audioCtx() {
+  if (!snd.ctx) snd.ctx = new (window.AudioContext || window.webkitAudioContext)();
+  return snd.ctx;
+}
+const dbGain = (db) => Math.pow(10, db / 20);
+const rnd = (a, b) => a + Math.random() * (b - a);
+const pick = (list) => list[Math.floor(Math.random() * list.length)];
+const isRadio = (it) => !!(S.cfg && S.cfg.radio && it && it.key === S.cfg.radio.item);
+const FADE_IN = new Float32Array(32).map((_, i) => Math.sin((i / 31) * Math.PI / 2));     // equal-power crossfades
+const FADE_OUT = FADE_IN.slice().reverse();
+function buffer(url) {
+  if (!S.bufs.has(url)) {
+    S.bufs.set(url, fetch(url).then((r) => { if (!r.ok) throw new Error(url); return r.arrayBuffer(); })
+      .then((b) => audioCtx().decodeAudioData(b)).catch(() => null));
+  }
+  return S.bufs.get(url);
+}
+const volumeGain = () => Math.pow(Number($('vol').value) / 75, 2);
+const radioGain = () => Math.pow(Number($('rvol').value) / 75, 2);
+// the radio plays through its own bus and slider, apart from the sounds of the scene
+function radioBus() {
+  const ctx = audioCtx();
+  if (!S.rbus) { S.rbus = ctx.createGain(); S.rbus.connect(ctx.destination); }
+  S.rbus.gain.value = radioGain();
+  return S.rbus;
+}
+
+// where the sounds come from: outside past each window, the eaves, the street lamp, the lane, the far fields
+function anchors() {
+  if (S.anchors) return S.anchors;
+  const c = room.getCenter(new THREE.Vector3());
+  const centre = (name, fallback) => {
+    const o = scene.getObjectByName(name);
+    return o ? new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3()) : fallback.clone();
+  };
+  const outward = (p) => p.clone().sub(c).setY(0).normalize();
+  const main = centre('WS_GlassMain', c), left = centre('WS_GlassLeft', c);
+  const back = outward(main), side = outward(left), lat = new THREE.Vector3(back.z, 0, -back.x);
+  const street = S.scene.streetLamp ? new THREE.Vector3(...S.scene.streetLamp.position) : main.clone().addScaledVector(back, 6);
+  S.anchors = {
+    centre: c, back, lat,
+    outMain: main.clone().addScaledVector(back, 4), outLeft: left.clone().addScaledVector(side, 4),
+    eaves: main.clone().addScaledVector(back, 0.6).add(new THREE.Vector3(0, 0.8, 0)),
+    street, winMain: main, radio: centre('WS_Radio', c),
+    lamp: S.scene.lamp ? new THREE.Vector3(...S.scene.lamp.position) : c.clone(),
+    farLeft: c.clone().addScaledVector(side, 60).addScaledVector(back, 30),
+    house: main.clone().addScaledVector(back, 15).addScaledVector(lat, 4),
+    gate: main.clone().addScaledVector(back, 2).addScaledVector(lat, -3),
+  };
+  return S.anchors;
+}
+function anchor(at) {
+  const a = anchors();
+  if (at === 'far') return a.street.clone().addScaledVector(a.back, 25).addScaledVector(a.lat, rnd(-20, 20));
+  if (at === 'floor') return a.centre.clone().set(a.centre.x + rnd(-0.8, 0.8), 0.05, a.centre.z + rnd(-0.6, 0.6));
+  if (at === 'lane') return a.street.clone().addScaledVector(a.back, 3);
+  return (a[at] || a.centre).clone();
+}
+// a panner per playing sound, turned toward its place every frame
+function spot(at, input, dur, bus) {
+  const ctx = audioCtx();
+  if (!ctx.createStereoPanner) { input.connect(bus || S.bus); return null; }
+  const s = { pan: ctx.createStereoPanner(), pos: anchor(at), path: null, t0: ctx.currentTime, dur: dur || 1 };
+  if (at === 'lane') {                                   // a pass along the lane behind the fence, either way
+    const a = anchors(), dir = Math.random() < 0.5 ? 1 : -1;
+    s.path = [s.pos.clone().addScaledVector(a.lat, -30 * dir), s.pos.clone().addScaledVector(a.lat, 30 * dir)];
+  }
+  input.connect(s.pan).connect(bus || S.bus);
+  S.spots.push(s);
+  aimSpot(s, true);
+  return s;
+}
+function dropSpot(s) { const i = S.spots.indexOf(s); if (i >= 0) S.spots.splice(i, 1); }
+const camPos = new THREE.Vector3();
+function aimSpot(s, now) {
+  const ctx = audioCtx();
+  if (s.follow) s.pos.copy(s.follow());
+  else if (s.path) s.pos.lerpVectors(s.path[0], s.path[1], Math.min(1, Math.max(0, (ctx.currentTime - s.t0) / s.dur)));
+  camPos.copy(s.pos).applyMatrix4(camera.matrixWorldInverse);
+  const x = camPos.x, z = -camPos.z, pan = 0.7 * Math.max(-1, Math.min(1, x / (Math.hypot(x, z) || 1)));
+  if (now) s.pan.pan.value = pan; else s.pan.pan.setTargetAtTime(pan, ctx.currentTime, 0.1);
+}
+function updateSpots() { for (const s of S.spots) aimSpot(s, false); }
+function track(src, extra) {
+  const item = { src, extra };
+  S.live.add(item);
+  src.onended = () => {
+    S.live.delete(item);
+    if (extra && extra.spot) dropSpot(extra.spot);
+    if (extra && extra.onend) extra.onend();
+  };
+  return item;
+}
+
+// a loop: stretches of 45-80 % of the clip from random places, crossfaded; into its own panner or into dest.
+// "first" delays the start, "sessions" makes it come and go (on and off spans in seconds)
+function startBed(bed, dest, tag) {
+  const ctx = audioCtx(), out = ctx.createGain();
+  const where = dest ? (out.connect(dest), null) : spot(bed.at, out);
+  let alive = true, timer = 0;
+  const t0 = ctx.currentTime + (bed.first ? rnd(bed.first[0], bed.first[1]) : 0.05);
+  let until = bed.sessions ? t0 + rnd(bed.sessions.on[0], bed.sessions.on[1]) : Infinity;
+  const later = (t) => { timer = setTimeout(() => next(t), Math.max(0, (t - ctx.currentTime - 1.5) * 1000)); };
+  const next = async (t) => {
+    if (!alive) return;
+    if (t >= until) {                                     // the last stretch fades out; a pause, then more
+      t += rnd(bed.sessions.off[0], bed.sessions.off[1]);
+      until = t + rnd(bed.sessions.on[0], bed.sessions.on[1]);
+      later(t);
+      return;
+    }
+    const f = pick(bed.files), b = await buffer(f.src);
+    if (!b || !alive) return;
+    const fade = Math.min(2.5, b.duration / 5);
+    const len = Math.max(2 * fade + 0.5, Math.min(b.duration - 0.25, rnd(0.45, 0.8) * b.duration));
+    const off = rnd(0.1, Math.max(0.1, b.duration - len - 0.1));
+    const start = Math.max(t, ctx.currentTime + 0.05);
+    const src = ctx.createBufferSource(), env = ctx.createGain();
+    src.buffer = b; env.gain.value = 0;
+    env.gain.setValueCurveAtTime(FADE_IN, start, fade);
+    env.gain.setValueCurveAtTime(FADE_OUT, start + len - fade, fade);
+    const g = ctx.createGain(); g.gain.value = dbGain(f.gain);
+    src.connect(env).connect(g).connect(out);
+    src.start(start, off, len);
+    track(src, tag ? { tag } : undefined);
+    later(start + len - fade);
+  };
+  later(t0);
+  return { out, stop() { alive = false; clearTimeout(timer); if (where) dropSpot(where); } };
+}
+// one-shots at random intervals
+function startEvents(ev) {
+  let alive = true, timer = 0;
+  const fire = async () => {
+    if (!alive) return;
+    const f = pick(ev.files), b = await buffer(f.src);
+    if (b && alive) playOnce(b, f.gain, ev.at);
+    timer = setTimeout(fire, rnd(ev.every[0], ev.every[1]) * 1000);
+  };
+  timer = setTimeout(fire, rnd(ev.first[0], ev.first[1]) * 1000);
+  return { stop() { alive = false; clearTimeout(timer); } };
+}
+function playOnce(b, gainDb, at) {
+  const ctx = audioCtx(), src = ctx.createBufferSource(), g = ctx.createGain();
+  src.buffer = b; g.gain.value = dbGain(gainDb);
+  src.connect(g);
+  const where = spot(at, g, b.duration);
+  src.start();
+  track(src, { spot: where });
+}
+// the lamp: a 100 Hz filament buzz, only while it is lit
+function startHum() {
+  const h = S.scene.lamp && S.cfg.lampHum;
+  if (!h) return null;
+  const ctx = audioCtx(), osc = ctx.createOscillator(), band = ctx.createBiquadFilter(), amp = ctx.createGain(), level = ctx.createGain();
+  osc.type = 'sawtooth'; osc.frequency.value = 100;
+  band.type = 'bandpass'; band.frequency.value = 420; band.Q.value = 0.9;
+  amp.gain.value = dbGain(h.amp);
+  level.gain.value = 1 - lampOff.value;
+  osc.connect(band).connect(amp).connect(level);
+  const where = spot(h.at, level);
+  osc.start();
+  track(osc);
+  return { level, stop() { if (where) dropSpot(where); } };
+}
+// the radio. Between stations: its static, slow fading, now and then a tuning whistle. Its songs are the ones in the
+// radio/ folder next to the page (the site's own) and the ones the viewer adds from their own device (kept in this
+// browser, in IndexedDB; nothing is uploaded). It plays them like a station: the static goes, songs change with a
+// short retune, one follows another; ◀ ▶ in the radio row switch them.
+// RADIO.songs: the folder's songs, then the viewer's, each { title, url } or { title, key } (its IndexedDB key);
+// RADIO.cur names the current one (its url or 'own:<key>'), so it is found again when the list changes.
+const RADIO_DIR = 'radio/';
+const RADIO = { songs: [], own: [], folder: null, folderP: null, i: 0, at: 0, cur: null,
+                bytes: new Map(), decoded: new Map(), bad: new Set(), want: 0 };
+const songId = (s) => s.url || `own:${s.key}`;
+try {
+  const kept = JSON.parse(localStorage.getItem('workshop.radio') || 'null');
+  if (kept && Array.isArray(kept.songs)) {                // "songs": the viewer's own (titles), as before
+    Object.assign(RADIO, { own: kept.songs, at: kept.at || 0, cur: kept.cur || (kept.songs.length ? `own:${kept.i || 0}` : null) });
+  }
+} catch (e) { /* nothing kept */ }
+function radioList() {
+  RADIO.songs = [...(RADIO.folder || []), ...RADIO.own.map((title, key) => ({ title, key }))];
+  const k = RADIO.songs.findIndex((s) => songId(s) === RADIO.cur);
+  RADIO.i = Math.max(0, k);
+  if (k < 0 && RADIO.folder) RADIO.at = 0;                // the song it was on is gone
+}
+radioList();
+function radioKeep() {
+  try {
+    localStorage.setItem('workshop.radio', JSON.stringify({ songs: RADIO.own, i: RADIO.i, at: Math.round(RADIO.at), cur: RADIO.cur }));
+  } catch (e) { /* not kept */ }
+}
+const allBad = () => RADIO.songs.length > 0 && RADIO.songs.every((s) => RADIO.bad.has(songId(s)));
+// the songs in radio/, found once when the radio is first turned on, in the order of their file names. On GitHub
+// Pages from radio/playlist.json: a template the Pages build fills with the folder's files after every change, so
+// songs uploaded on the GitHub site play without anything else to do. Where nothing fills it (a local server serves
+// the template as it is, not JSON), from the server's listing of the folder.
+const SONG_FILE = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac)$/i;
+function folderSongs() {
+  if (RADIO.folderP) return RADIO.folderP;
+  const get = (url, as) => fetch(url, { cache: 'no-cache' }).then((r) => (r.ok ? r[as]() : null)).catch(() => null);
+  const names = new Set();
+  const add = (n) => {
+    try { n = decodeURIComponent(String(n).split(/[?#]/)[0].split('/').filter(Boolean).pop() || ''); } catch (e) { return; }
+    if (SONG_FILE.test(n)) names.add(n);
+  };
+  RADIO.folderP = (async () => {
+    const list = await get(`${RADIO_DIR}playlist.json`, 'json');
+    if (list && Array.isArray(list.songs)) list.songs.forEach(add);
+    else {
+      const page = await get(RADIO_DIR, 'text');
+      if (page) for (const m of page.matchAll(/href="([^"]+)"/gi)) add(m[1]);
+    }
+    RADIO.folder = [...names].sort((a, b) => a.localeCompare(b, 'ru', { numeric: true }))
+      .map((n) => ({ title: fileTitle(n), url: RADIO_DIR + encodeURIComponent(n) }));
+    radioList();
+    radioUi();
+    return RADIO.folder;
+  })();
+  return RADIO.folderP;
+}
+let songDbP = null;
+function songStore(mode, fn) {
+  if (!songDbP) {
+    songDbP = new Promise((ok) => {
+      try {
+        const rq = indexedDB.open('workshop-radio', 1);
+        rq.onupgradeneeded = () => rq.result.createObjectStore('songs');
+        rq.onsuccess = () => ok(rq.result);
+        rq.onerror = rq.onblocked = () => ok(null);
+      } catch (e) { ok(null); }
+    });
+  }
+  return songDbP.then((db) => new Promise((ok) => {
+    if (!db) { ok(null); return; }
+    try {
+      const tx = db.transaction('songs', mode), rq = fn(tx.objectStore('songs'));
+      tx.oncomplete = () => ok(rq ? rq.result : true);
+      tx.onerror = tx.onabort = () => ok(null);
+    } catch (e) { ok(null); }
+  }));
+}
+// "Artist — Title" from the file's ID3v2 tag (Russian tags are often cp1251 bytes in Latin-1 frames), else its name
+function songTitle(bytes, name) {
+  const b = new Uint8Array(bytes), tags = {};
+  const text = (enc, a) => {
+    try {
+      if (enc === 1) {
+        const be = a[0] === 0xfe && a[1] === 0xff, bom = be || (a[0] === 0xff && a[1] === 0xfe);
+        return new TextDecoder(be ? 'utf-16be' : 'utf-16le').decode(a.subarray(bom ? 2 : 0));
+      }
+      if (enc === 2) return new TextDecoder('utf-16be').decode(a);
+      if (enc === 3) return new TextDecoder('utf-8').decode(a);
+      return new TextDecoder(a.some((x) => x >= 0xc0) ? 'windows-1251' : 'latin1').decode(a);
+    } catch (e) { return ''; }
+  };
+  if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33 && (b[3] === 3 || b[3] === 4)) {
+    const v = b[3], syncsafe = (k) => (b[k] << 21) | (b[k + 1] << 14) | (b[k + 2] << 7) | b[k + 3];
+    const end = Math.min(b.length, 10 + syncsafe(6));
+    let p = 10;
+    if (b[5] & 0x40) p += v === 3 ? 4 + ((b[10] << 24) | (b[11] << 16) | (b[12] << 8) | b[13]) : syncsafe(10);
+    while (p + 10 < end) {
+      const id = String.fromCharCode(b[p], b[p + 1], b[p + 2], b[p + 3]);
+      const size = v === 4 ? syncsafe(p + 4) : ((b[p + 4] << 24) | (b[p + 5] << 16) | (b[p + 6] << 8) | b[p + 7]) >>> 0;
+      if (!/^[A-Z0-9]{4}$/.test(id) || size <= 1 || p + 10 + size > end) break;
+      if (id === 'TIT2' || id === 'TPE1') {
+        tags[id] = text(b[p + 10], b.subarray(p + 11, p + 10 + size)).split('\u0000').filter(Boolean).join(', ').trim();
+      }
+      p += 10 + size;
+    }
+  }
+  return tags.TIT2 ? (tags.TPE1 ? `${tags.TPE1} — ${tags.TIT2}` : tags.TIT2) : fileTitle(name);
+}
+// a file name as a title: no extension, no track number in front ("01 - ", "3. ", "10 "), spaces for underscores
+function fileTitle(name) {
+  return name.replace(/\.[a-z0-9]+$/i, '').replace(/_\d{5,}$/, '').replace(/_/g, ' ')
+    .replace(/^\s*\d{1,3}(?:\s*[-–.)]\s*|\s+)(?=\S)/, '').replace(/\s+/g, ' ').trim() || name;
+}
+// a song decoded at radio quality (22 kHz, mono: the radio has one speaker) with its level set; a song of the folder
+// is downloaded when it is about to play (and the next one while it plays)
+function songAudio(i) {
+  const s = RADIO.songs[i], id = songId(s);
+  if (!RADIO.decoded.has(id)) {
+    RADIO.decoded.set(id, (async () => {
+      let bytes;
+      if (s.url) {
+        const r = await fetch(s.url).catch(() => null);
+        if (!r || !r.ok) return null;                      // no longer in the folder: skipped like a file that will not play
+        bytes = await r.arrayBuffer();
+        const t = songTitle(bytes, decodeURIComponent(s.url.slice(RADIO_DIR.length)));
+        if (t !== s.title) { s.title = t; radioUi(); }     // its tags name it better than its file name
+      } else {
+        bytes = RADIO.bytes.get(s.key) || await songStore('readonly', (st) => st.get(s.key));
+        if (!bytes) return { missing: true };              // the browser no longer has it
+      }
+      const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      const dec = await new OAC(2, 1, 22050).decodeAudioData(bytes.slice(0));
+      const n = dec.length, mono = audioCtx().createBuffer(1, n, dec.sampleRate), m = mono.getChannelData(0);
+      const l = dec.getChannelData(0), r = dec.numberOfChannels > 1 ? dec.getChannelData(1) : l;
+      let sum = 0;
+      for (let k = 0; k < n; k++) { const x = (l[k] + r[k]) * 0.5; m[k] = x; sum += x * x; }
+      const rms = 10 * Math.log10(sum / Math.max(1, n) + 1e-12), want = (S.cfg.radio.music || {}).rms ?? -30;
+      return { buf: mono, gain: Math.max(-24, Math.min(12, want - rms)) };
+    })().catch(() => null));
+  }
+  const near = (k) => RADIO.songs[k] && songId(RADIO.songs[k]);
+  const keep = new Set([id, near(RADIO.i), near((RADIO.i + 1) % Math.max(1, RADIO.songs.length))]);
+  for (const k of [...RADIO.decoded.keys()]) if (!keep.has(k)) RADIO.decoded.delete(k);
+  return RADIO.decoded.get(id);
+}
+function radioUi(note) {
+  const n = RADIO.songs.length, playing = !!(S.radio && S.radio.wants()), s = RADIO.songs[RADIO.i];
+  $('radioPanel').hidden = !S.radioOn;
+  const title = n && s ? `${s.title} · ${RADIO.i + 1}/${n}` : '';
+  $('radioNow').textContent = note || (!n ? 'шум эфира' : playing ? title : `пауза · ${title}`);
+  $('radioPrev').hidden = $('radioNext').hidden = n < 2;
+  $('radioPlay').hidden = !n;
+  $('radioPlay').textContent = playing ? '\u275A\u275A' : '\u25B6\uFE0E';
+  $('radioPlay').setAttribute('aria-label', playing ? 'Пауза' : 'Играть');
+}
+function startRadio() {
+  const r = S.cfg.radio, ctx = audioCtx(), out = ctx.createGain(), fadeG = ctx.createGain(), music = ctx.createGain();
+  out.gain.value = 0; out.gain.setTargetAtTime(1, ctx.currentTime, 0.05);
+  fadeG.connect(out);
+  // songs through a small speaker: no deep bass, no top, a little presence (each song's level is set when decoded;
+  // a compressor here would add its own make-up gain)
+  const hp = ctx.createBiquadFilter(), mid = ctx.createBiquadFilter(), lp = ctx.createBiquadFilter();
+  hp.type = 'highpass'; hp.frequency.value = 140;
+  mid.type = 'peaking'; mid.frequency.value = 1700; mid.Q.value = 0.9; mid.gain.value = 3;
+  lp.type = 'lowpass'; lp.frequency.value = 4800;
+  music.gain.value = 0;
+  music.connect(hp).connect(mid).connect(lp).connect(out);
+  const tag = {};                                         // marks this radio's sources
+  const where = spot(r.at, out, 0, radioBus());
+  const bed = startBed({ files: r.files }, fadeG, tag);
+  let alive = true, t1 = 0, t2 = 0, song = null, wantPlay = false;
+  const whistle = (d) => {
+    const t = ctx.currentTime + 0.05, osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.frequency.setValueAtTime(rnd(900, 2600), t);
+    osc.frequency.exponentialRampToValueAtTime(rnd(180, 700), t + d);
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(dbGain(r.tune.amp), t + Math.min(0.25, d / 3));
+    g.gain.setValueAtTime(dbGain(r.tune.amp), t + d * 0.7);
+    g.gain.linearRampToValueAtTime(0, t + d);
+    osc.connect(g).connect(out);
+    osc.start(t); osc.stop(t + d + 0.05);
+    track(osc, { tag });
+  };
+  const drift = () => {                                   // the static breathes; a playing song keeps its place
+    if (!alive) return;
+    if (song) { RADIO.at = song.from + (ctx.currentTime - song.t0); radioKeep(); }
+    else fadeG.gain.setTargetAtTime(dbGain(rnd(-3, 0.5)), ctx.currentTime, 0.5);
+    t1 = setTimeout(drift, rnd(1200, 3500));
+  };
+  const tune = () => {                                    // between stations, now and then someone turns the dial
+    if (!alive) return;
+    if (!song && !wantPlay) {
+      whistle(rnd(1.2, 2.8));
+      fadeG.gain.setTargetAtTime(dbGain(-5), ctx.currentTime + 0.05, 0.15);
+    }
+    t2 = setTimeout(tune, rnd(r.tune.every[0], r.tune.every[1]) * 1000);
+  };
+  const stopSong = () => {
+    if (!song) return;
+    const s = song; song = null;
+    RADIO.at = s.from + (ctx.currentTime - s.t0);
+    music.gain.cancelScheduledValues(ctx.currentTime);
+    music.gain.setTargetAtTime(0, ctx.currentTime, 0.05);
+    try { s.src.stop(ctx.currentTime + 0.3); } catch (e) { /* already ended */ }
+  };
+  const play = async (i, from, retune) => {
+    const token = ++RADIO.want;
+    wantPlay = true;
+    stopSong();
+    RADIO.i = i; RADIO.cur = songId(RADIO.songs[i]); radioUi();
+    if (retune) {                                         // a short retune: the static comes up with a whistle
+      fadeG.gain.cancelScheduledValues(ctx.currentTime);
+      fadeG.gain.setTargetAtTime(1, ctx.currentTime, 0.04);
+      whistle(0.9);
+    }
+    const a = await songAudio(i);
+    if (!alive || token !== RADIO.want) return;
+    if (!a || a.missing) {
+      wantPlay = false;
+      if (a) {                                            // the browser lost the viewer's songs; the folder's stay
+        RADIO.own = []; RADIO.bytes.clear(); radioList(); radioKeep();
+        radioUi('свои песни не найдены, добавьте их снова');
+      } else {                                            // this file will not play: the next one
+        RADIO.bad.add(RADIO.cur);
+        if (allBad()) radioUi('эти файлы не читаются');
+        else step(1);
+      }
+      return;
+    }
+    const start = ctx.currentTime + (retune ? 0.5 : 0.05), off = from < a.buf.duration - 2 ? Math.max(0, from) : 0;
+    const src = ctx.createBufferSource(), g = ctx.createGain();
+    src.buffer = a.buf; g.gain.value = dbGain(a.gain);
+    src.connect(g).connect(music);
+    music.gain.cancelScheduledValues(start);
+    music.gain.setTargetAtTime(1, start, 0.12);
+    fadeG.gain.cancelScheduledValues(start);
+    fadeG.gain.setTargetAtTime(0, start, 0.2);            // the static goes while the song plays
+    src.start(start, off);
+    song = { src, t0: start, from: off };
+    track(src, { tag, onend: () => { if (alive && song && song.src === src) { song = null; step(1); } } });
+    RADIO.at = off; radioKeep(); radioUi();
+    if (RADIO.songs.length > 1) songAudio((i + 1) % RADIO.songs.length);    // the next one ready in time
+  };
+  const step = (d) => {
+    const n = RADIO.songs.length;
+    if (!n || allBad()) return;
+    let k = RADIO.i;
+    do k = (k + d + n) % n; while (RADIO.bad.has(songId(RADIO.songs[k])));
+    play(k, 0, true);
+  };
+  const pause = () => {                                  // the song stops, the static and the whistles come back
+    ++RADIO.want; wantPlay = false;
+    stopSong(); radioKeep();
+    fadeG.gain.cancelScheduledValues(ctx.currentTime);
+    fadeG.gain.setTargetAtTime(1, ctx.currentTime, 0.04);
+    whistle(0.9);
+    radioUi();
+  };
+  drift();
+  t2 = setTimeout(tune, rnd(1500, 4000));
+  radioUi();
+  return {
+    out, play, step, pause,
+    wants: () => wantPlay,
+    toggle() {
+      if (wantPlay) pause();
+      else if (RADIO.songs.length) play(Math.min(RADIO.i, RADIO.songs.length - 1), RADIO.at, true);
+    },
+    stop() {
+      alive = false; ++RADIO.want; wantPlay = false; clearTimeout(t1); clearTimeout(t2); bed.stop();
+      stopSong(); radioKeep();
+      out.gain.setTargetAtTime(0, ctx.currentTime, 0.05);
+      const mine = [...S.live].filter((x) => x.extra && x.extra.tag === tag);
+      setTimeout(() => {
+        mine.forEach(({ src }) => { try { src.stop(); } catch (e) { /* already ended */ } });
+        if (where) dropSpot(where);
+        out.disconnect();
+      }, 400);
+    },
+  };
+}
+// songs from the viewer's own device: read here, kept in this browser only
+async function addSongs(files) {
+  const list = [...files].filter((f) => /^audio\//.test(f.type) || /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac)$/i.test(f.name));
+  if (!list.length || !S.cfg) return;
+  const bytes = await Promise.all(list.map((f) => f.arrayBuffer()));
+  RADIO.own = list.map((f, k) => songTitle(bytes[k], f.name));
+  RADIO.bytes = new Map(bytes.map((b, k) => [k, b]));
+  for (const id of [...RADIO.decoded.keys(), ...RADIO.bad]) {    // the keys are reused for the new songs
+    if (id.startsWith('own:')) { RADIO.decoded.delete(id); RADIO.bad.delete(id); }
+  }
+  RADIO.cur = 'own:0'; RADIO.at = 0; radioList(); radioKeep();
+  songStore('readwrite', (st) => { st.clear(); bytes.forEach((b, k) => st.put(b, k)); return null; });
+  if (!S.radioOn) toggleRadio();
+  if (S.radio) S.radio.play(RADIO.i, 0, true);
+  radioUi();
+}
+async function setSound(on) {
+  S.on = on;
+  $('soundBtn').setAttribute('aria-pressed', String(on));
+  $('vol').hidden = !on;
+  const ctx = audioCtx();
+  if (!S.bus) { S.bus = ctx.createGain(); S.bus.gain.value = 0; S.bus.connect(ctx.destination); }
+  S.bus.gain.cancelScheduledValues(ctx.currentTime);
+  if (on) {
+    if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
+    S.bus.gain.setTargetAtTime(volumeGain(), ctx.currentTime, 0.5);      // fades in over a couple of seconds
+    S.runners = [...S.cfg.beds.map((bed) => startBed(bed)), ...S.cfg.events.map((ev) => startEvents(ev))];
+    S.hum = startHum();
+  } else {
+    S.bus.gain.setTargetAtTime(0, ctx.currentTime, 0.08);
+    const old = [...S.runners, S.hum].filter(Boolean);
+    const live = [...S.live].filter((x) => !(x.extra && x.extra.tag));        // the radio plays on
+    S.runners = []; S.hum = null;
+    live.forEach((x) => S.live.delete(x));
+    old.forEach((r) => r.stop());
+    setTimeout(() => live.forEach(({ src }) => { try { src.stop(); } catch (e) { /* already ended */ } }), 450);
+  }
+}
+// a click on the radio turns it on (static and whistles) or off altogether; songs start from the radio row
+function toggleRadio() {
+  S.radioOn = !S.radioOn;
+  playSound(S.radioOn ? 'on' : 'off', 0.35);                      // the radio's own switch, a softer click
+  if (S.radioOn) {
+    const ctx = audioCtx();
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    S.radio = startRadio();
+    folderSongs();                                        // the ▶ comes up once the folder's songs are found
+  } else if (S.radio) { S.radio.stop(); S.radio = null; }
+  radioUi();
+}
+$('radioPlay').addEventListener('click', () => { if (S.radio) S.radio.toggle(); });
+$('radioPrev').addEventListener('click', () => { if (S.radio) S.radio.step(-1); });
+$('radioNext').addEventListener('click', () => { if (S.radio) S.radio.step(1); });
+$('radioOff').addEventListener('click', () => { if (S.radioOn) toggleRadio(); });
+$('radioAdd').addEventListener('click', () => $('radioFiles').click());
+$('radioFiles').addEventListener('change', (e) => { addSongs(e.target.files); e.target.value = ''; });
+addEventListener('dragover', (e) => { if (S.cfg && e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
+addEventListener('drop', (e) => {                                     // songs can also be dropped onto the page
+  if (!S.cfg || !e.dataTransfer || !e.dataTransfer.files.length) return;
+  e.preventDefault(); addSongs(e.dataTransfer.files);
+});
+$('soundBtn').addEventListener('click', () => setSound(!S.on));
+$('vol').addEventListener('input', () => {
+  if (S.bus && S.on) S.bus.gain.setTargetAtTime(volumeGain(), snd.ctx.currentTime, 0.05);
+  try { localStorage.setItem('workshop.volume', $('vol').value); } catch (e) { /* not kept */ }
+});
+$('rvol').addEventListener('input', () => {
+  if (S.rbus) S.rbus.gain.setTargetAtTime(radioGain(), snd.ctx.currentTime, 0.05);
+  try { localStorage.setItem('workshop.radioVolume', $('rvol').value); } catch (e) { /* not kept */ }
+});
+document.addEventListener('visibilitychange', () => {               // quiet in a hidden tab
+  if (!snd.ctx) return;
+  if (document.hidden) snd.ctx.suspend().catch(() => {});
+  else if (S.on || S.radioOn) snd.ctx.resume().catch(() => {});
+});
+// the menu folds away to a small "Меню" button; the choice is kept in this browser
+function setMenu(open) {
+  $('menuBody').hidden = !open;
+  document.querySelector('.hud').classList.toggle('folded', !open);
+  $('menuBtn').setAttribute('aria-expanded', String(open));
+  $('menuBtn').textContent = open ? 'Скрыть' : 'Меню';
+  try { localStorage.setItem('workshop.menu', open ? '1' : '0'); } catch (e) { /* not kept */ }
+}
+$('menuBtn').addEventListener('click', () => setMenu($('menuBody').hidden));
+try { if (localStorage.getItem('workshop.menu') === '0') setMenu(false); } catch (e) { /* open */ }
+
+// --- picking: the first opaque surface under the pointer; see-through texels of stickers, decals, cobwebs
+// and the dirty glass let the ray go on, a wall or a window in front stops it
+const picker = new THREE.Raycaster(), ndc = new THREE.Vector2();
+picker.layers.enableAll();
+const alphaCache = new Map();
+function alphaPixels(tex) {
+  if (alphaCache.has(tex)) return alphaCache.get(tex);
+  let px = null;
+  const img = tex.image;
+  if (img && img.width) {
+    try {
+      const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+      const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0);
+      px = { w: img.width, h: img.height, data: x.getImageData(0, 0, img.width, img.height).data };
+    } catch (e) { px = null; }
+  }
+  alphaCache.set(tex, px);
+  return px;
+}
+function opaqueAt(hit) {
+  const m = hit.object.material;
+  if (!m.map || !(m.transparent || m.alphaTest > 0) || !hit.uv) return true;
+  const px = alphaPixels(m.map);
+  if (!px) return true;
+  const x = Math.min(px.w - 1, Math.max(0, Math.floor(hit.uv.x * px.w)));
+  const y = Math.min(px.h - 1, Math.max(0, Math.floor(hit.uv.y * px.h)));
+  return px.data[(y * px.w + x) * 4 + 3] > 90;
+}
+function pickAt(cx, cy) {
+  if (!pickables.length) return 0;
+  const r = canvas.getBoundingClientRect();
+  ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
+  picker.setFromCamera(ndc, camera);
+  for (const h of picker.intersectObjects(pickables, false)) {
+    if (!opaqueAt(h)) continue;
+    const a = h.object.geometry.attributes._objid;
+    return a ? Math.round(a.getX(h.face.a)) : 0;
+  }
+  return 0;
+}
+
+// --- triangles of each thing, per joined mesh (built once per mesh, on first use)
+const triCache = new WeakMap();
+function trisOf(mesh) {
+  let out = triCache.get(mesh);
+  if (out) return out;
+  out = new Map();
+  const g = mesh.geometry, idx = g.index, ids = g.attributes._objid, buckets = new Map();
+  const n = idx ? idx.count : g.attributes.position.count;
+  for (let i = 0; i < n; i += 3) {
+    const a = idx ? idx.getX(i) : i;
+    const id = Math.round(ids.getX(a));
+    if (!id) continue;
+    let b = buckets.get(id);
+    if (!b) buckets.set(id, (b = []));
+    b.push(a, idx ? idx.getX(i + 1) : i + 1, idx ? idx.getX(i + 2) : i + 2);
+  }
+  for (const [id, arr] of buckets) out.set(id, new Uint32Array(arr));
+  triCache.set(mesh, out);
+  return out;
+}
+
+// --- hover: a warm glow over the thing under the pointer (inspect mode, mouse only)
+const hiMat = new THREE.MeshBasicMaterial({ color: 0xffb35c, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending,
+  depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4, fog: false });
+const hiGeo = new Map();              // kept: they share the room's vertex buffers, disposing would drop those
+let hiId = 0;
+const hiMeshes = [];
+function highlight(id) {
+  if (id === hiId) return;
+  hiId = id;
+  for (const h of hiMeshes) h.parent.remove(h);
+  hiMeshes.length = 0;
+  if (!id) return;
+  for (const mesh of pickables) {
+    const idx = trisOf(mesh).get(id);
+    if (!idx) continue;
+    const key = mesh.uuid + ':' + id;
+    let g = hiGeo.get(key);
+    if (!g) {
+      g = new THREE.BufferGeometry();
+      g.setAttribute('position', mesh.geometry.attributes.position);
+      g.setIndex(new THREE.BufferAttribute(idx, 1));
+      hiGeo.set(key, g);
+    }
+    const h = new THREE.Mesh(g, hiMat);
+    h.renderOrder = 9; h.raycast = () => {}; h.frustumCulled = false;
+    mesh.add(h); hiMeshes.push(h);
+  }
+}
+
+// --- the inspect view: the thing alone, centred in the space left free by the card
+const iscene = new THREE.Scene();
+const icam = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.003, 50);
+const icontrols = new OrbitControls(icam, canvas);
+icontrols.enabled = false; icontrols.enableDamping = true; icontrols.dampingFactor = 0.08; icontrols.enablePan = false;
+let iFrame = null;
+function itemGroup(id) {
+  const grp = new THREE.Group(), box = new THREE.Box3();
+  const toCam = new THREE.Vector3(), facing = new THREE.Vector3();
+  const pa = new THREE.Vector3(), pb = new THREE.Vector3(), pc = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+  let facingArea = 0;
+  for (const mesh of pickables) {
+    const idx = trisOf(mesh).get(id);
+    if (!idx) continue;
+    const src = mesh.geometry, g = new THREE.BufferGeometry(), mw = mesh.matrixWorld, pos = src.attributes.position;
+    for (const [k, a] of Object.entries(src.attributes)) g.setAttribute(k, a);
+    g.setIndex(new THREE.BufferAttribute(idx, 1));
+    for (let i = 0; i < idx.length; i += 3) {
+      pa.fromBufferAttribute(pos, idx[i]).applyMatrix4(mw);
+      pb.fromBufferAttribute(pos, idx[i + 1]).applyMatrix4(mw);
+      pc.fromBufferAttribute(pos, idx[i + 2]).applyMatrix4(mw);
+      box.expandByPoint(pa); box.expandByPoint(pb); box.expandByPoint(pc);
+      const n = e1.subVectors(pb, pa).cross(e2.subVectors(pc, pa));
+      toCam.subVectors(camera.position, pa);
+      if (n.dot(toCam) > 0) { facing.add(n); facingArea += n.length(); }     // the side seen in the room
+    }
+    const m = new THREE.Mesh(g, mesh.material);
+    m.matrixAutoUpdate = false; m.matrix.copy(mw); m.renderOrder = mesh.renderOrder; m.frustumCulled = false;
+    grp.add(m);
+  }
+  const center = box.getCenter(new THREE.Vector3());
+  const radius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 0.01);
+  // flat things (posters, signs, stickers) face the viewer square-on; solids keep the angle they had in the room
+  const flat = facingArea > 0 ? facing.length() / facingArea : 0;
+  const dir = flat > 0.85 ? facing.normalize() : camera.position.clone().sub(center).normalize();
+  // the thing stays where it stands in the room (the box-projected reflections need its real position); the
+  // camera orbits it instead
+  return { grp, center, radius, dir };
+}
+function frameInspect() {
+  if (!iFrame) return;
+  const W = innerWidth, H = innerHeight, sheet = $('sheet').getBoundingClientRect();
+  const side = sheet.left > W * 0.35;                       // card on the right, or a sheet at the bottom
+  const aw = side ? sheet.left : W, ah = side ? H : sheet.top;
+  icam.aspect = W / H;
+  icam.setViewOffset(W, H, side ? (W - aw) / 2 : 0, side ? 0 : (H - ah) / 2, W, H);
+  const halfV = deg(icam.fov) / 2 * (ah / H), halfH = Math.atan(Math.tan(deg(icam.fov) / 2) * aw / H);
+  const dist = iFrame.radius / Math.sin(Math.min(halfV, halfH)) * 1.12;
+  icam.near = dist / 100; icam.far = dist * 20; icam.updateProjectionMatrix();
+  icontrols.minDistance = dist * 0.35; icontrols.maxDistance = dist * 2.2;
+  return dist;
+}
+async function openItem(id) {
+  const it = ITEMS && ITEMS.get(id);
+  if (!it || it.action) return;
+  if (!CARDS) {
+    try { CARDS = await (await fetch(cardsUrl)).json(); } catch (e) { CARDS = {}; }
+  }
+  fillCard(it, CARDS[it.key]);
+  const paper = S.cfg && S.cfg.ui && S.cfg.ui.card;
+  if (paper) playSound('card', dbGain(paper.files[0].gain));          // the card turns over like paper
+  highlight(0); canvas.classList.remove('pick');
+  iscene.clear();
+  iFrame = itemGroup(id);
+  iscene.add(iFrame.grp);
+  iscene.environment = scene.environment; iscene.environmentIntensity = scene.environmentIntensity;
+  $('inspect').hidden = false; document.querySelector('.hud').classList.add('away'); hint.classList.add('gone');
+  inspecting = id; controls.enabled = false; icontrols.enabled = true;
+  const dist = frameInspect();
+  icontrols.target.copy(iFrame.center);
+  icam.position.copy(iFrame.center).addScaledVector(iFrame.dir, dist);
+  icam.up.set(0, 1, 0); icam.lookAt(iFrame.center); icontrols.update();
+  $('sheet').scrollTop = 0; $('sheet').focus({ preventScroll: true });
+}
+function closeItem() {
+  if (!inspecting) return;
+  inspecting = 0; iFrame = null; iscene.clear();
+  icontrols.enabled = false; controls.enabled = true;
+  $('inspect').hidden = true; document.querySelector('.hud').classList.remove('away');
+  if (inspectOn) showInspectHint();
+  canvas.focus({ preventScroll: true });
+}
+function fillCard(it, c) {
+  c = c || {};
+  $('cKicker').textContent = c.kicker || it.cat;
+  $('cTitle').textContent = c.title || it.title;
+  $('cMeta').textContent = c.meta || '';
+  const body = $('cBody'); body.replaceChildren();
+  for (const t of c.text || ['Рассказ об этом предмете ещё пишется.']) {
+    const p = document.createElement('p'); p.textContent = t; body.append(p);
+  }
+  const facts = $('cFacts'); facts.replaceChildren();
+  for (const f of c.facts || []) { const li = document.createElement('li'); li.textContent = f; facts.append(li); }
+  $('cFactsBox').hidden = !(c.facts && c.facts.length);
+  const src = $('cSources'); src.replaceChildren();
+  for (const s of c.sources || []) {
+    const li = document.createElement('li');
+    if (s.u) {
+      const a = document.createElement('a'); a.href = s.u; a.target = '_blank'; a.rel = 'noopener noreferrer'; a.textContent = s.t || s.u;
+      li.append(a);
+    } else li.textContent = s.t;
+    src.append(li);
+  }
+  $('cSrcBox').hidden = !(c.sources && c.sources.length);
+  $('cNote').hidden = !c.note; $('cNote').textContent = c.note || '';
+}
+function showInspectHint() {
+  hint.textContent = 'Режим осмотра: нажмите на предмет, чтобы рассмотреть его. Выключатель на стене гасит и включает лампу.';
+  hint.dataset.sticky = '1'; hint.classList.remove('gone');
+}
+$('inspectBtn').addEventListener('click', (e) => {
+  inspectOn = !inspectOn;
+  e.currentTarget.setAttribute('aria-pressed', String(inspectOn));
+  if (inspectOn) {
+    showInspectHint();
+    if (!CARDS && cardsUrl) fetch(cardsUrl).then((r) => r.json()).then((j) => { CARDS = j; }).catch(() => {});
+  } else {
+    highlight(0); canvas.classList.remove('pick');
+    delete hint.dataset.sticky; hint.classList.add('gone');
+  }
+});
+$('inspectClose').addEventListener('click', closeItem);
+addEventListener('keydown', (e) => { if (e.key === 'Escape') closeItem(); });
+
+// a click is a press that hardly moved; a drag turns the room as before
+let down = null, hoverAt = null;
+canvas.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY, t: performance.now() }; });
+canvas.addEventListener('pointerup', (e) => {
+  const d = down; down = null;
+  if (!d || inspecting) return;
+  if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6 || performance.now() - d.t > 600) return;
+  const id = pickAt(e.clientX, e.clientY), it = id && ITEMS && ITEMS.get(id);
+  if (!it) return;
+  if (it.action === 'lamp') toggleLamp();
+  else if (inspectOn) openItem(id);
+  else if (isRadio(it)) toggleRadio();
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (e.pointerType === 'mouse' && !inspecting && !e.buttons) hoverAt = [e.clientX, e.clientY];
+});
+canvas.addEventListener('pointerleave', () => { hoverAt = null; highlight(0); canvas.classList.remove('pick'); });
+function updateHover() {
+  if (!hoverAt || inspecting) return;
+  const [x, y] = hoverAt; hoverAt = null;
+  const id = pickAt(x, y), it = id && ITEMS && ITEMS.get(id);
+  canvas.classList.toggle('pick', !!(it && (it.action || inspectOn || isRadio(it))));
+  highlight(it && inspectOn && !it.action ? id : 0);
+}
+document.getElementById('reset').addEventListener('click', resetView);
+document.getElementById('haze').addEventListener('click', (e) => {
+  haze.visible = !haze.visible; e.currentTarget.setAttribute('aria-pressed', String(haze.visible));
+});
+document.getElementById('probe').addEventListener('click', (e) => {
+  probeOn.value = probeOn.value ? 0.0 : 1.0;
+  e.currentTarget.setAttribute('aria-pressed', String(!!probeOn.value));
+});
+const hint = document.getElementById('hint');
+const hideHint = () => { if (!hint.dataset.sticky) hint.classList.add('gone'); };
+canvas.addEventListener('pointerdown', hideHint, { once: true });
+setTimeout(hideHint, 9000);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight, false);
+  if (ORBIT && !room.isEmpty()) { updateLimits(); frameStart(); }
+  if (inspecting) frameInspect();
+});
+window.__viewer = { THREE, scene, camera, renderer, controls, setLamp: (v) => { lamp.t = lamp.target = v; applyLamp(); },
+  // for checks without a visible window: pick under a screen point, open/close a card, the inspect view's camera
+  pick: (x, y) => pickAt(x, y), items: () => ITEMS, open: (id) => openItem(id), close: () => closeItem(),
+  inspect: () => ({ scene: iscene, camera: icam, controls: icontrols, id: inspecting }), toggleLamp: () => toggleLamp(), sw,
+  sound: S, setSound: (on) => setSound(on), toggleRadio: () => toggleRadio(), startBed: (bed, dest) => startBed(bed, dest),
+  audio: () => audioCtx(), clips: snd, radio: RADIO, addSongs: (f) => addSongs(f), folderSongs: () => folderSongs(),
+  songAudio: (i) => songAudio(i),
+  moto: () => motoPass(), MOTO, MIST, MIST_K, now: () => clock.getElapsedTime(),
+  motoAt: (t) => { MOTO.bike.visible = true; for (const g of MOTO.glow) g.visible = true;    // checks: the pass at t s
+                   MOTO.state = 'riding'; MOTO.t0 = clock.getElapsedTime() - t; return updateMoto(clock.getElapsedTime()); } };
+
+const clock = new THREE.Clock();
+let frames = 0, last = performance.now();
+let prevT = 0;
+renderer.setAnimationLoop(() => {
+  const now0 = clock.getElapsedTime(), dt = Math.min(now0 - prevT, 0.1); prevT = now0;
+  if (lamp.t !== lamp.target) {                       // about 0.8 s to switch; instant with reduced motion
+    const step = reduceMotion ? 1 : dt / 0.8;
+    lamp.t = lamp.target > lamp.t ? Math.min(lamp.target, lamp.t + step) : Math.max(lamp.target, lamp.t - step);
+    applyLamp();
+  }
+  if (sw.node && sw.angle !== sw.target) {           // the switch lever snaps round in about 0.2 s
+    sw.angle += (sw.target - sw.angle) * (reduceMotion ? 1 : Math.min(1, dt / 0.06));
+    if (Math.abs(sw.target - sw.angle) < 1e-3) sw.angle = sw.target;
+    sw.node.rotation.x = sw.base + sw.angle;
+  }
+  const t = reduceMotion ? 0 : now0;
+  for (const p of hazeParts) p.material.uniforms.uTime.value = t;
+  MIST.uMistTime.value = t;
+  const riding = updateMoto(now0);
+  if (S.spots.length) updateSpots();
+  if (inspecting) {
+    icontrols.update();
+    renderer.render(iscene, icam);
+  } else {
+    updateHover();
+    controls.update();
+    if (riding) {                    // the room and the street, then the motorcycle, then the glass and the haze
+      camera.layers.set(0); renderer.render(scene, camera);
+      renderer.autoClear = false;
+      renderer.render(MOTO.scene, camera);
+      camera.layers.set(1); renderer.render(scene, camera);
+      camera.layers.enableAll(); renderer.autoClear = true;
+    } else {
+      renderer.render(scene, camera);
+    }
+  }
+  frames++;
+  const now = performance.now();
+  if (now - last > 500) {
+    stats.textContent = `△ ${(sceneTris / 1000).toFixed(1)}k · ${Math.round(frames * 1000 / (now - last))} кадр/с`;
+    frames = 0; last = now;
+  }
+});
+</script>
+
+</body>
+</html>
